@@ -1,0 +1,334 @@
+{
+  "version": "2024.01",
+  "description": "Google domains for geo-rotation and load balancing",
+
+  "primary": [
+    "www.google.com",
+    "www.google.co.uk",
+    "www.google.ca",
+    "www.google.com.au",
+    "www.google.de",
+    "www.google.fr"
+  ],
+
+  "all": {
+    "global": {
+      "domain": "www.google.com",
+      "country": "US",
+      "language": "en"
+    },
+    "united_kingdom": {
+      "domain": "www.google.co.uk",
+      "country": "GB",
+      "language": "en"
+    },
+    "canada": {
+      "domain": "www.google.ca",
+      "country": "CA",
+      "language": "en"
+    },
+    "australia": {
+      "domain": "www.google.com.au",
+      "country": "AU",
+      "language": "en"
+    },
+    "germany": {
+      "domain": "www.google.de",
+      "country": "DE",
+      "language": "de"
+    },
+    "france": {
+      "domain": "www.google.fr",
+      "country": "FR",
+      "language": "fr"
+    },
+    "spain": {
+      "domain": "www.google.es",
+      "country": "ES",
+      "language": "es"
+    },
+    "italy": {
+      "domain": "www.google.it",
+      "country": "IT",
+      "language": "it"
+    },
+    "netherlands": {
+      "domain": "www.google.nl",
+      "country": "NL",
+      "language": "nl"
+    },
+    "belgium": {
+      "domain": "www.google.be",
+      "country": "BE",
+      "language": "nl"
+    },
+    "switzerland": {
+      "domain": "www.google.ch",
+      "country": "CH",
+      "language": "de"
+    },
+    "austria": {
+      "domain": "www.google.at",
+      "country": "AT",
+      "language": "de"
+    },
+    "poland": {
+      "domain": "www.google.pl",
+      "country": "PL",
+      "language": "pl"
+    },
+    "russia": {
+      "domain": "www.google.ru",
+      "country": "RU",
+      "language": "ru"
+    },
+    "japan": {
+      "domain": "www.google.co.jp",
+      "country": "JP",
+      "language": "ja"
+    },
+    "south_korea": {
+      "domain": "www.google.co.kr",
+      "country": "KR",
+      "language": "ko"
+    },
+    "brazil": {
+      "domain": "www.google.com.br",
+      "country": "BR",
+      "language": "pt"
+    },
+    "mexico": {
+      "domain": "www.google.com.mx",
+      "country": "MX",
+      "language": "es"
+    },
+    "argentina": {
+      "domain": "www.google.com.ar",
+      "country": "AR",
+      "language": "es"
+    },
+    "india": {
+      "domain": "www.google.co.in",
+      "country": "IN",
+      "language": "en"
+    },
+    "singapore": {
+      "domain": "www.google.com.sg",
+      "country": "SG",
+      "language": "en"
+    },
+    "hong_kong": {
+      "domain": "www.google.com.hk",
+      "country": "HK",
+      "language": "zh"
+    },
+    "taiwan": {
+      "domain": "www.google.com.tw",
+      "country": "TW",
+      "language": "zh"
+    },
+    "indonesia": {
+      "domain": "www.google.co.id",
+      "country": "ID",
+      "language": "id"
+    },
+    "thailand": {
+      "domain": "www.google.co.th",
+      "country": "TH",
+      "language": "th"
+    },
+    "vietnam": {
+      "domain": "www.google.com.vn",
+      "country": "VN",
+      "language": "vi"
+    },
+    "philippines": {
+      "domain": "www.google.com.ph",
+      "country": "PH",
+      "language": "en"
+    },
+    "malaysia": {
+      "domain": "www.google.com.my",
+      "country": "MY",
+      "language": "en"
+    },
+    "new_zealand": {
+      "domain": "www.google.co.nz",
+      "country": "NZ",
+      "language": "en"
+    },
+    "south_africa": {
+      "domain": "www.google.co.za",
+      "country": "ZA",
+      "language": "en"
+    },
+    "ireland": {
+      "domain": "www.google.ie",
+      "country": "IE",
+      "language": "en"
+    },
+    "sweden": {
+      "domain": "www.google.se",
+      "country": "SE",
+      "language": "sv"
+    },
+    "norway": {
+      "domain": "www.google.no",
+      "country": "NO",
+      "language": "no"
+    },
+    "denmark": {
+      "domain": "www.google.dk",
+      "country": "DK",
+      "language": "da"
+    },
+    "finland": {
+      "domain": "www.google.fi",
+      "country": "FI",
+      "language": "fi"
+    },
+    "portugal": {
+      "domain": "www.google.pt",
+      "country": "PT",
+      "language": "pt"
+    },
+    "greece": {
+      "domain": "www.google.gr",
+      "country": "GR",
+      "language": "el"
+    },
+    "turkey": {
+      "domain": "www.google.com.tr",
+      "country": "TR",
+      "language": "tr"
+    },
+    "israel": {
+      "domain": "www.google.co.il",
+      "country": "IL",
+      "language": "he"
+    },
+    "uae": {
+      "domain": "www.google.ae",
+      "country": "AE",
+      "language": "ar"
+    },
+    "saudi_arabia": {
+      "domain": "www.google.com.sa",
+      "country": "SA",
+      "language": "ar"
+    },
+    "egypt": {
+      "domain": "www.google.com.eg",
+      "country": "EG",
+      "language": "ar"
+    },
+    "czech_republic": {
+      "domain": "www.google.cz",
+      "country": "CZ",
+      "language": "cs"
+    },
+    "romania": {
+      "domain": "www.google.ro",
+      "country": "RO",
+      "language": "ro"
+    },
+    "hungary": {
+      "domain": "www.google.hu",
+      "country": "HU",
+      "language": "hu"
+    },
+    "ukraine": {
+      "domain": "www.google.com.ua",
+      "country": "UA",
+      "language": "uk"
+    },
+    "colombia": {
+      "domain": "www.google.com.co",
+      "country": "CO",
+      "language": "es"
+    },
+    "chile": {
+      "domain": "www.google.cl",
+      "country": "CL",
+      "language": "es"
+    },
+    "peru": {
+      "domain": "www.google.com.pe",
+      "country": "PE",
+      "language": "es"
+    }
+  },
+
+  "byRegion": {
+    "north_america": [
+      "www.google.com",
+      "www.google.ca",
+      "www.google.com.mx"
+    ],
+    "europe": [
+      "www.google.co.uk",
+      "www.google.de",
+      "www.google.fr",
+      "www.google.es",
+      "www.google.it",
+      "www.google.nl",
+      "www.google.pl",
+      "www.google.se",
+      "www.google.no"
+    ],
+    "asia_pacific": [
+      "www.google.co.jp",
+      "www.google.co.kr",
+      "www.google.co.in",
+      "www.google.com.au",
+      "www.google.com.sg",
+      "www.google.com.hk"
+    ],
+    "south_america": [
+      "www.google.com.br",
+      "www.google.com.ar",
+      "www.google.com.co",
+      "www.google.cl"
+    ],
+    "middle_east": [
+      "www.google.ae",
+      "www.google.co.il",
+      "www.google.com.sa",
+      "www.google.com.tr"
+    ]
+  },
+
+  "englishOnly": [
+    "www.google.com",
+    "www.google.co.uk",
+    "www.google.ca",
+    "www.google.com.au",
+    "www.google.co.nz",
+    "www.google.co.in",
+    "www.google.com.sg",
+    "www.google.com.ph",
+    "www.google.com.my",
+    "www.google.co.za",
+    "www.google.ie"
+  ],
+
+  "proxyGeoMatch": {
+    "US": "www.google.com",
+    "GB": "www.google.co.uk",
+    "CA": "www.google.ca",
+    "AU": "www.google.com.au",
+    "DE": "www.google.de",
+    "FR": "www.google.fr",
+    "ES": "www.google.es",
+    "IT": "www.google.it",
+    "NL": "www.google.nl",
+    "JP": "www.google.co.jp",
+    "KR": "www.google.co.kr",
+    "BR": "www.google.com.br",
+    "IN": "www.google.co.in",
+    "RU": "www.google.ru",
+    "PL": "www.google.pl",
+    "SE": "www.google.se",
+    "MX": "www.google.com.mx"
+  }
+}
