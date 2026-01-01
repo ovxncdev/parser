@@ -3,7 +3,7 @@
 
 High-performance Google dork parser with hybrid Go/TypeScript architecture. Built for speed, stealth, and scale.
 
-## ⚡ Features
+##  Features
 
 - **Blazing Fast**: Go core engine for HTTP scraping (10-40x faster than Node.js)
 - **Stealth Mode**: Advanced fingerprinting, timing randomization, header rotation
