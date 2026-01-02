@@ -5,7 +5,7 @@ import { readFile, access, constants, readdir } from 'node:fs/promises';
 import { existsSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import inquirer from 'inquirer';
+import { createRequire } from 'node:module';
 
 import { DorkerUI, showBanner } from './ui.js';
 import { WorkerIPC } from './ipc.js';
