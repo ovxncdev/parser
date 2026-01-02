@@ -1,58 +1,47 @@
 /**
- * Engine Orchestrator
- * Spawns and manages the Go core engine process
- * Handles JSON communication between TypeScript and Go
+ * Go Engine Manager
+ * Manages the Go subprocess that handles HTTP requests
  */
 
 import { spawn, ChildProcess } from 'child_process';
 import { EventEmitter } from 'events';
 import path from 'path';
 import fs from 'fs';
-import readline from 'readline';
-import { nanoid } from 'nanoid';
+import { getLogger } from '../utils/logger.js';
 import type {
   EngineConfig,
   BaseMessage,
-  InitMessage,
-  TaskMessage,
+  ConfigMessage,
+  SearchMessage,
   ProxyMessage,
-  IncomingMessage,
-  ReadyMessage,
   ResultMessage,
   ErrorMessage,
-  BlockedMessage,
-  StatsMessage,
+  StatusMessage,
 } from '../types/index.js';
-import { getLogger } from '../utils/logger.js';
 
 const logger = getLogger();
 
 // Engine states
-export type EngineState = 'idle' | 'starting' | 'ready' | 'running' | 'paused' | 'stopping' | 'stopped' | 'error';
+export type EngineState = 'idle' | 'starting' | 'ready' | 'running' | 'stopping' | 'stopped' | 'error';
 
 // Engine events
 export interface EngineEvents {
-  ready: (message: ReadyMessage) => void;
-  result: (message: ResultMessage) => void;
-  error: (message: ErrorMessage) => void;
-  blocked: (message: BlockedMessage) => void;
-  stats: (message: StatsMessage) => void;
-  stateChange: (state: EngineState, previousState: EngineState) => void;
-  exit: (code: number | null, signal: string | null) => void;
-  message: (message: IncomingMessage) => void;
+  ready: () => void;
+  result: (result: ResultMessage) => void;
+  error: (error: ErrorMessage) => void;
+  status: (status: StatusMessage) => void;
+  stateChange: (state: EngineState) => void;
+  exit: (code: number | null) => void;
 }
 
 export class Engine extends EventEmitter {
   private process: ChildProcess | null = null;
   private state: EngineState = 'idle';
   private binaryPath: string;
-  private config: EngineConfig | null = null;
-  private messageBuffer: string = '';
   private readyPromise: Promise<void> | null = null;
   private readyResolve: (() => void) | null = null;
   private readyReject: ((error: Error) => void) | null = null;
   private startTimeout: NodeJS.Timeout | null = null;
-  private messageQueue: Array<{ message: BaseMessage; resolve: () => void; reject: (err: Error) => void }> = [];
 
   constructor(binaryPath?: string) {
     super();
@@ -64,11 +53,11 @@ export class Engine extends EventEmitter {
    */
   private findBinary(): string {
     const possiblePaths = [
-      path.join(process.cwd(), 'bin', 'gorker'),
-      path.join(process.cwd(), 'bin', 'gorker.exe'),
-      path.join(process.cwd(), 'core', 'gorker'),
-      path.join(__dirname, '..', '..', 'bin', 'gorker'),
-      path.join(__dirname, '..', '..', 'bin', 'gorker.exe'),
+      './core/bin/gorker',
+      './bin/gorker',
+      path.join(__dirname, '../../core/bin/gorker'),
+      path.join(__dirname, '../../../core/bin/gorker'),
+      '/usr/local/bin/gorker',
     ];
 
     for (const p of possiblePaths) {
@@ -77,42 +66,41 @@ export class Engine extends EventEmitter {
       }
     }
 
-    // Default path
-    return path.join(process.cwd(), 'bin', 'gorker');
+    // Default - will fail if not found
+    return './core/bin/gorker';
   }
 
   /**
-   * Get current engine state
+   * Get current state
    */
   getState(): EngineState {
     return this.state;
   }
 
   /**
-   * Set engine state and emit event
+   * Set state and emit event
    */
-  private setState(newState: EngineState): void {
-    const previousState = this.state;
-    this.state = newState;
-    this.emit('stateChange', newState, previousState);
-    logger.debug('Engine state changed', { from: previousState, to: newState });
+  private setState(state: EngineState): void {
+    this.state = state;
+    this.emit('stateChange', state);
+    logger.debug('Engine state changed', { state });
   }
 
   /**
-   * Start the Go engine
+   * Start the engine
    */
   async start(config: EngineConfig): Promise<void> {
     if (this.state !== 'idle' && this.state !== 'stopped' && this.state !== 'error') {
       throw new Error(`Cannot start engine in state: ${this.state}`);
     }
 
+    this.setState('starting');
+
     // Check binary exists
     if (!fs.existsSync(this.binaryPath)) {
+      this.setState('error');
       throw new Error(`Engine binary not found: ${this.binaryPath}. Run 'npm run build:go' first.`);
     }
-
-    this.config = config;
-    this.setState('starting');
 
     // Create promise for ready state
     this.readyPromise = new Promise((resolve, reject) => {
@@ -120,73 +108,209 @@ export class Engine extends EventEmitter {
       this.readyReject = reject;
     });
 
+    // Set timeout for startup
+    this.startTimeout = setTimeout(() => {
+      if (this.state === 'starting') {
+        this.setState('error');
+        if (this.readyReject) {
+          this.readyReject(new Error('Engine startup timed out'));
+        }
+        this.stop();
+      }
+    }, 30000);
+
     // Spawn process
     this.process = spawn(this.binaryPath, [], {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: { ...process.env },
     });
 
-    // Set up stdout handler (JSON messages from Go)
-    const rl = readline.createInterface({
-      input: this.process.stdout!,
-      crlfDelay: Infinity,
+    // Handle stdout (JSON messages)
+    let stdoutBuffer = '';
+    this.process.stdout?.on('data', (data: Buffer) => {
+      stdoutBuffer += data.toString();
+      
+      // Process complete lines
+      const lines = stdoutBuffer.split('\n');
+      stdoutBuffer = lines.pop() || '';
+
+      for (const line of lines) {
+        if (line.trim()) {
+          this.handleMessage(line.trim());
+        }
+      }
     });
 
-    rl.on('line', (line) => {
-      this.handleMessage(line);
-    });
-
-    // Set up stderr handler (errors/logs from Go)
-    this.process.stderr!.on('data', (data) => {
-      const message = data.toString().trim();
-      if (message) {
-        logger.warn('Engine stderr', { message });
+    // Handle stderr (logs)
+    this.process.stderr?.on('data', (data: Buffer) => {
+      const msg = data.toString().trim();
+      if (msg) {
+        logger.debug('Engine stderr', { message: msg });
       }
     });
 
     // Handle process exit
-    this.process.on('exit', (code, signal) => {
-      this.handleExit(code, signal);
+    this.process.on('exit', (code) => {
+      logger.info('Engine process exited', { code });
+      this.setState('stopped');
+      this.emit('exit', code);
+      this.cleanup();
     });
 
     // Handle process error
     this.process.on('error', (error) => {
-      logger.error('Engine process error', { error: error.message });
+      logger.error('Engine process error', { error });
       this.setState('error');
       if (this.readyReject) {
         this.readyReject(error);
       }
+      this.emit('error', { type: 'error', id: '', error: error.message });
     });
 
-    // Set startup timeout
-    this.startTimeout = setTimeout(() => {
-      if (this.state === 'starting') {
-        const error = new Error('Engine startup timeout');
-        logger.error('Engine startup timeout');
-        this.setState('error');
-        if (this.readyReject) {
-          this.readyReject(error);
-        }
-        this.stop();
-      }
-    }, 30000);
-
-    // Send init message
-    const initMessage: InitMessage = {
-      type: 'init',
-      timestamp: Date.now(),
-      id: nanoid(),
+    // Send configuration
+    this.sendMessage({
+      type: 'config',
+      id: 'init',
       config,
-    };
-
-    this.send(initMessage);
+    } as ConfigMessage);
 
     // Wait for ready
-    return this.readyPromise;
+    await this.readyPromise;
   }
 
   /**
-   * Stop the engine
+   * Handle incoming message from engine
+   */
+  private handleMessage(line: string): void {
+    try {
+      const message = JSON.parse(line) as BaseMessage;
+
+      switch (message.type) {
+        case 'ready':
+          this.handleReady();
+          break;
+        case 'result':
+          this.emit('result', message as ResultMessage);
+          break;
+        case 'error':
+          this.emit('error', message as ErrorMessage);
+          break;
+        case 'status':
+          this.emit('status', message as StatusMessage);
+          break;
+        default:
+          logger.warn('Unknown message type from engine', { type: message.type });
+      }
+    } catch (error) {
+      logger.error('Failed to parse engine message', { line, error });
+    }
+  }
+
+  /**
+   * Handle ready message
+   */
+  private handleReady(): void {
+    if (this.startTimeout) {
+      clearTimeout(this.startTimeout);
+      this.startTimeout = null;
+    }
+
+    this.setState('ready');
+    
+    if (this.readyResolve) {
+      this.readyResolve();
+      this.readyResolve = null;
+      this.readyReject = null;
+    }
+
+    this.emit('ready');
+    logger.info('Engine ready');
+  }
+
+  /**
+   * Send message to engine
+   */
+  sendMessage(message: BaseMessage): void {
+    if (!this.process || !this.process.stdin) {
+      throw new Error('Engine not running');
+    }
+
+    const line = JSON.stringify(message) + '\n';
+    this.process.stdin.write(line);
+  }
+
+  /**
+   * Submit a search task
+   */
+  search(id: string, dork: string, page: number = 0): void {
+    this.sendMessage({
+      type: 'search',
+      id,
+      dork,
+      page,
+    } as SearchMessage);
+  }
+
+  /**
+   * Add proxies
+   */
+  addProxies(proxies: string[]): void {
+    this.sendMessage({
+      type: 'proxy',
+      id: 'add_proxies',
+      action: 'add',
+      proxies,
+    } as ProxyMessage);
+  }
+
+  /**
+   * Remove proxy
+   */
+  removeProxy(proxy: string): void {
+    this.sendMessage({
+      type: 'proxy',
+      id: 'remove_proxy',
+      action: 'remove',
+      proxies: [proxy],
+    } as ProxyMessage);
+  }
+
+  /**
+   * Get proxy status
+   */
+  getProxyStatus(): void {
+    this.sendMessage({
+      type: 'proxy',
+      id: 'proxy_status',
+      action: 'status',
+      proxies: [],
+    } as ProxyMessage);
+  }
+
+  /**
+   * Pause engine
+   */
+  pause(): void {
+    this.sendMessage({
+      type: 'control',
+      id: 'pause',
+      action: 'pause',
+    } as BaseMessage & { action: string });
+  }
+
+  /**
+   * Resume engine
+   */
+  resume(): void {
+    this.sendMessage({
+      type: 'control',
+      id: 'resume',
+      action: 'resume',
+    } as BaseMessage & { action: string });
+  }
+
+  /**
+   * Stop the engine gracefully
    */
   async stop(): Promise<void> {
     if (this.state === 'stopped' || this.state === 'idle') {
@@ -195,298 +319,60 @@ export class Engine extends EventEmitter {
 
     this.setState('stopping');
 
-    // Clear timeout
-    if (this.startTimeout) {
-      clearTimeout(this.startTimeout);
-      this.startTimeout = null;
+    // Send shutdown command
+    try {
+      this.sendMessage({
+        type: 'control',
+        id: 'shutdown',
+        action: 'shutdown',
+      } as BaseMessage & { action: string });
+    } catch {
+      // Process might already be gone
     }
 
-    // Send stop message
+    // Wait a bit for graceful shutdown
+    await new Promise(resolve => setTimeout(resolve, 1000));
+
+    // Force kill if still running
     if (this.process && !this.process.killed) {
-      this.send({ type: 'stop', timestamp: Date.now() });
-
-      // Give it time to gracefully shutdown
-      await new Promise<void>((resolve) => {
-        const timeout = setTimeout(() => {
-          if (this.process && !this.process.killed) {
-            this.process.kill('SIGKILL');
-          }
-          resolve();
-        }, 5000);
-
-        this.process!.once('exit', () => {
-          clearTimeout(timeout);
-          resolve();
-        });
-      });
+      this.process.kill('SIGTERM');
+      
+      // Force kill after timeout
+      setTimeout(() => {
+        if (this.process && !this.process.killed) {
+          this.process.kill('SIGKILL');
+        }
+      }, 5000);
     }
 
-    this.setState('stopped');
+    this.cleanup();
   }
 
   /**
-   * Pause processing
+   * Cleanup resources
    */
-  pause(): void {
-    if (this.state !== 'running') {
-      return;
-    }
-
-    this.send({ type: 'pause', timestamp: Date.now() });
-    this.setState('paused');
-  }
-
-  /**
-   * Resume processing
-   */
-  resume(): void {
-    if (this.state !== 'paused') {
-      return;
-    }
-
-    this.send({ type: 'resume', timestamp: Date.now() });
-    this.setState('running');
-  }
-
-  /**
-   * Send a task to the engine
-   */
-  sendTask(dork: string, page: number = 0, proxy?: string): string {
-    const taskId = nanoid();
-
-    const message: TaskMessage = {
-      type: 'task',
-      timestamp: Date.now(),
-      task_id: taskId,
-      dork,
-      page,
-      proxy,
-    };
-
-    this.send(message);
-    return taskId;
-  }
-
-  /**
-   * Add a proxy to the engine
-   */
-  addProxy(proxy: string, protocol: string = 'http'): void {
-    const message: ProxyMessage = {
-      type: 'add_proxy',
-      timestamp: Date.now(),
-      proxy,
-      protocol,
-    };
-
-    this.send(message);
-  }
-
-  /**
-   * Remove a proxy from the engine
-   */
-  removeProxy(proxy: string, protocol: string = 'http'): void {
-    const message: ProxyMessage = {
-      type: 'del_proxy',
-      timestamp: Date.now(),
-      proxy,
-      protocol,
-    };
-
-    this.send(message);
-  }
-
-  /**
-   * Request stats from the engine
-   */
-  requestStats(): void {
-    this.send({ type: 'health', timestamp: Date.now() });
-  }
-
-  /**
-   * Send a message to the Go process
-   */
-  private send(message: BaseMessage | object): void {
-    if (!this.process || !this.process.stdin || this.process.stdin.destroyed) {
-      logger.warn('Cannot send message, process not available');
-      return;
-    }
-
-    try {
-      const json = JSON.stringify(message);
-      this.process.stdin.write(json + '\n');
-      logger.trace('Sent message to engine', { type: (message as BaseMessage).type });
-    } catch (error) {
-      logger.error('Failed to send message', { error });
-    }
-  }
-
-  /**
-   * Handle incoming message from Go
-   */
-  private handleMessage(line: string): void {
-    if (!line.trim()) {
-      return;
-    }
-
-    try {
-      const message = JSON.parse(line) as IncomingMessage;
-      logger.trace('Received message from engine', { type: message.type });
-
-      // Emit generic message event
-      this.emit('message', message);
-
-      // Handle specific message types
-      switch (message.type) {
-        case 'ready':
-          this.handleReady(message as ReadyMessage);
-          break;
-
-        case 'result':
-          this.emit('result', message as ResultMessage);
-          break;
-
-        case 'error':
-          this.handleError(message as ErrorMessage);
-          break;
-
-        case 'blocked':
-          this.emit('blocked', message as BlockedMessage);
-          break;
-
-        case 'stats':
-          this.emit('stats', message as StatsMessage);
-          break;
-
-        case 'progress':
-          this.emit('progress', message);
-          break;
-
-        case 'proxy_status':
-          this.emit('proxyStatus', message);
-          break;
-
-        case 'done':
-          this.emit('done', message);
-          break;
-
-        default:
-          logger.warn('Unknown message type', { type: (message as BaseMessage).type });
-      }
-    } catch (error) {
-      logger.error('Failed to parse message', { line, error });
-    }
-  }
-
-  /**
-   * Handle ready message
-   */
-  private handleReady(message: ReadyMessage): void {
-    // Clear startup timeout
+  private cleanup(): void {
     if (this.startTimeout) {
       clearTimeout(this.startTimeout);
       this.startTimeout = null;
     }
-
-    this.setState('ready');
-    logger.engineReady(message.version, message.max_workers, message.proxy_count);
-
-    // Resolve ready promise
-    if (this.readyResolve) {
-      this.readyResolve();
-      this.readyResolve = null;
-      this.readyReject = null;
-    }
-
-    this.emit('ready', message);
-  }
-
-  /**
-   * Handle error message
-   */
-  private handleError(message: ErrorMessage): void {
-    logger.error('Engine error', { code: message.code, message: message.message, fatal: message.fatal });
-
-    this.emit('error', message);
-
-    if (message.fatal) {
-      this.setState('error');
-      if (this.readyReject) {
-        this.readyReject(new Error(message.message));
-        this.readyResolve = null;
-        this.readyReject = null;
-      }
-    }
-  }
-
-  /**
-   * Handle process exit
-   */
-  private handleExit(code: number | null, signal: string | null): void {
-    logger.info('Engine process exited', { code, signal });
-
-    // Clean up
     this.process = null;
-
-    if (this.state !== 'stopping' && this.state !== 'stopped') {
-      this.setState('error');
-
-      if (this.readyReject) {
-        this.readyReject(new Error(`Engine exited unexpectedly with code ${code}`));
-        this.readyResolve = null;
-        this.readyReject = null;
-      }
-    } else {
-      this.setState('stopped');
-    }
-
-    this.emit('exit', code, signal);
+    this.readyPromise = null;
+    this.readyResolve = null;
+    this.readyReject = null;
   }
 
   /**
    * Check if engine is running
    */
   isRunning(): boolean {
-    return this.state === 'running' || this.state === 'ready' || this.state === 'paused';
-  }
-
-  /**
-   * Set to running state
-   */
-  setRunning(): void {
-    if (this.state === 'ready' || this.state === 'paused') {
-      this.setState('running');
-    }
-  }
-
-  /**
-   * Get engine PID
-   */
-  getPid(): number | undefined {
-    return this.process?.pid;
-  }
-
-  /**
-   * Wait for engine to be ready
-   */
-  async waitReady(): Promise<void> {
-    if (this.state === 'ready' || this.state === 'running') {
-      return;
-    }
-
-    if (this.readyPromise) {
-      return this.readyPromise;
-    }
-
-    throw new Error('Engine not starting');
+    return this.state === 'ready' || this.state === 'running';
   }
 }
 
 // Singleton instance
 let engineInstance: Engine | null = null;
 
-/**
- * Get or create engine instance
- */
 export function getEngine(binaryPath?: string): Engine {
   if (!engineInstance) {
     engineInstance = new Engine(binaryPath);
@@ -494,9 +380,6 @@ export function getEngine(binaryPath?: string): Engine {
   return engineInstance;
 }
 
-/**
- * Reset engine instance
- */
 export async function resetEngine(): Promise<void> {
   if (engineInstance) {
     await engineInstance.stop();
