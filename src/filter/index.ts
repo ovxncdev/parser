@@ -1,43 +1,92 @@
 /**
  * Filter Pipeline
- * Combines all filters into a unified filtering system
+ * Unified filtering system combining all filters
  */
 
+import { UrlDeduplicator, DomainDeduplicator, DedupMode } from './dedup.js';
 import {
   extractDomain,
   extractTopDomain,
-  extractTld,
-  normalizeDomain,
   isValidDomain,
-  matchesDomainPattern,
+  matchesPattern,
 } from './domain.js';
 import {
-  UrlDeduplicator,
-  DomainDeduplicator,
-  DedupOptions,
-} from './dedup.js';
-import {
   AntiPublicFilter,
-  AntiPublicOptions,
   getAntiPublicFilter,
 } from './antiPublic.js';
-import type { FilterSettings, FilteredResult } from '../types/index.js';
 import { getLogger } from '../utils/logger.js';
 
 const logger = getLogger();
 
-// Re-export sub-modules
-export * from './domain.js';
-export * from './dedup.js';
-export * from './antiPublic.js';
+// Filter pipeline options
+export interface FilterPipelineOptions {
+  // Deduplication
+  removeDuplicates: boolean;
+  dedupMode: DedupMode;
+
+  // Domain filtering
+  domainWhitelist: string[];
+  domainBlacklist: string[];
+  tldWhitelist: string[];
+  tldBlacklist: string[];
+
+  // Content filtering
+  urlParamsOnly: boolean;
+  minUrlLength: number;
+  maxUrlLength: number;
+  keywordInclude: string[];
+  keywordExclude: string[];
+
+  // Anti-public
+  antiPublic: boolean;
+  antiPublicOptions: {
+    useDatabase: boolean;
+    trackNewDomains: boolean;
+  };
+
+  // Extensions
+  extensionWhitelist: string[];
+  extensionBlacklist: string[];
+}
+
+const DEFAULT_OPTIONS: FilterPipelineOptions = {
+  removeDuplicates: true,
+  dedupMode: 'normalized',
+  domainWhitelist: [],
+  domainBlacklist: [],
+  tldWhitelist: [],
+  tldBlacklist: [],
+  urlParamsOnly: false,
+  minUrlLength: 10,
+  maxUrlLength: 2000,
+  keywordInclude: [],
+  keywordExclude: [],
+  antiPublic: true,
+  antiPublicOptions: {
+    useDatabase: true,
+    trackNewDomains: true,
+  },
+  extensionWhitelist: [],
+  extensionBlacklist: ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.ico', '.css', '.js', '.woff', '.woff2', '.ttf', '.eot'],
+};
 
 // Filter result
 export interface FilterResult {
   url: string;
-  domain: string;
-  topDomain: string;
+  domain: string | null;
+  topDomain: string | null;
   passed: boolean;
   reasons: string[];
+}
+
+// Filtered URL with metadata
+export interface FilteredUrl {
+  url: string;
+  domain: string;
+  topDomain: string;
+  hasParams: boolean;
+  params: string[];
+  extension: string | null;
 }
 
 // Pipeline statistics
@@ -48,272 +97,204 @@ export interface FilterStats {
   byReason: Record<string, number>;
   uniqueDomains: number;
   uniqueTopDomains: number;
-  newDomains: number;
 }
 
-// Pipeline options (extends FilterSettings)
-export interface FilterPipelineOptions extends FilterSettings {
-  expectedUrls?: number;
-  bloomErrorRate?: number;
-}
-
-const DEFAULT_OPTIONS: FilterPipelineOptions = {
-  cleanDomains: true,
-  removeRedirects: true,
-  removeDuplicates: true,
-  urlParamsOnly: false,
-  antiPublic: true,
-  localAntiPublic: true,
-  tldWhitelist: [],
-  tldBlacklist: ['xyz', 'top', 'loan', 'work', 'click', 'gq', 'ml', 'ga', 'cf', 'tk'],
-  domainBlacklist: [],
-  keywordInclude: [],
-  keywordExclude: [],
-  minUrlLength: 10,
-  maxUrlLength: 2000,
-  expectedUrls: 1000000,
-  bloomErrorRate: 0.01,
-};
-
-/**
- * URL Filter Pipeline
- * Processes URLs through multiple filter stages
- */
 export class FilterPipeline {
   private options: FilterPipelineOptions;
   private urlDedup: UrlDeduplicator;
   private domainDedup: DomainDeduplicator;
-  private antiPublic: AntiPublicFilter | null;
-  private tldWhitelist: Set<string>;
-  private tldBlacklist: Set<string>;
-  private domainBlacklist: Set<string>;
-  private keywordInclude: RegExp[];
-  private keywordExclude: RegExp[];
+  private antiPublic: AntiPublicFilter | null = null;
   private stats: FilterStats;
 
   constructor(options: Partial<FilterPipelineOptions> = {}) {
     this.options = { ...DEFAULT_OPTIONS, ...options };
 
     // Initialize deduplicators
-    const dedupOptions: Partial<DedupOptions> = {
-      mode: 'normalized',
-      removeWww: true,
-      removeTrailingSlash: true,
-      removeFragment: true,
+    this.urlDedup = new UrlDeduplicator(1000000, 0.01, {
+      mode: this.options.dedupMode,
+      normalizeUrls: true,
       removeTrackingParams: true,
-    };
+      caseSensitive: false,
+    });
 
-    this.urlDedup = new UrlDeduplicator(
-      this.options.expectedUrls,
-      this.options.bloomErrorRate,
-      dedupOptions
-    );
-
-    this.domainDedup = new DomainDeduplicator(true);
+    this.domainDedup = new DomainDeduplicator();
 
     // Initialize anti-public filter
     if (this.options.antiPublic) {
       this.antiPublic = getAntiPublicFilter({
         enabled: true,
-        localDb: this.options.localAntiPublic,
+        useDatabase: this.options.antiPublicOptions.useDatabase,
+        trackNewDomains: this.options.antiPublicOptions.trackNewDomains,
       });
-    } else {
-      this.antiPublic = null;
     }
 
-    // Initialize TLD filters
-    this.tldWhitelist = new Set(this.options.tldWhitelist.map(t => t.toLowerCase()));
-    this.tldBlacklist = new Set(this.options.tldBlacklist.map(t => t.toLowerCase()));
-
-    // Initialize domain blacklist
-    this.domainBlacklist = new Set(this.options.domainBlacklist.map(d => normalizeDomain(d)));
-
-    // Initialize keyword filters
-    this.keywordInclude = this.options.keywordInclude.map(k => new RegExp(k, 'i'));
-    this.keywordExclude = this.options.keywordExclude.map(k => new RegExp(k, 'i'));
-
     // Initialize stats
-    this.stats = this.createEmptyStats();
-
-    logger.debug('Filter pipeline initialized', {
-      tldWhitelist: this.tldWhitelist.size,
-      tldBlacklist: this.tldBlacklist.size,
-      domainBlacklist: this.domainBlacklist.size,
-      keywordInclude: this.keywordInclude.length,
-      keywordExclude: this.keywordExclude.length,
-    });
-  }
-
-  /**
-   * Create empty stats object
-   */
-  private createEmptyStats(): FilterStats {
-    return {
+    this.stats = {
       total: 0,
       passed: 0,
       filtered: 0,
       byReason: {},
       uniqueDomains: 0,
       uniqueTopDomains: 0,
-      newDomains: 0,
     };
-  }
 
-  /**
-   * Record a filter reason
-   */
-  private recordReason(reason: string): void {
-    this.stats.byReason[reason] = (this.stats.byReason[reason] || 0) + 1;
+    logger.debug('FilterPipeline initialized', { options: this.options });
   }
 
   /**
    * Filter a single URL through the pipeline
    */
-  filterUrl(url: string): FilterResult {
+  filterOne(url: string): FilterResult {
     const reasons: string[] = [];
     let passed = true;
 
     this.stats.total++;
 
     // 1. Basic validation
-    const trimmedUrl = url.trim();
-    if (!trimmedUrl) {
-      reasons.push('empty');
+    if (!url || typeof url !== 'string') {
+      this.addReason(reasons, 'invalid_url');
       passed = false;
     }
 
     // 2. Length check
-    if (passed && this.options.minUrlLength > 0 && trimmedUrl.length < this.options.minUrlLength) {
-      reasons.push('too_short');
-      passed = false;
-    }
-
-    if (passed && this.options.maxUrlLength > 0 && trimmedUrl.length > this.options.maxUrlLength) {
-      reasons.push('too_long');
+    if (passed && (url.length < this.options.minUrlLength || url.length > this.options.maxUrlLength)) {
+      this.addReason(reasons, 'invalid_length');
       passed = false;
     }
 
     // 3. Extract domain
-    const domain = extractDomain(trimmedUrl);
-    const topDomain = extractTopDomain(trimmedUrl) || '';
+    const domain = passed ? extractDomain(url) : null;
+    const topDomain = domain ? extractTopDomain(domain) : null;
 
     if (passed && !domain) {
-      reasons.push('invalid_domain');
+      this.addReason(reasons, 'no_domain');
       passed = false;
     }
 
     // 4. Domain validation
     if (passed && domain && !isValidDomain(domain)) {
-      reasons.push('invalid_domain_format');
+      this.addReason(reasons, 'invalid_domain');
       passed = false;
     }
 
-    // 5. URL parameters check
-    if (passed && this.options.urlParamsOnly) {
-      try {
-        const parsedUrl = new URL(trimmedUrl.includes('://') ? trimmedUrl : 'http://' + trimmedUrl);
-        if (!parsedUrl.search || parsedUrl.search === '?') {
-          reasons.push('no_params');
+    // 5. TLD whitelist
+    if (passed && this.options.tldWhitelist.length > 0 && topDomain) {
+      const tld = topDomain.split('.').pop() || '';
+      if (!this.options.tldWhitelist.includes(tld)) {
+        this.addReason(reasons, 'tld_not_whitelisted');
+        passed = false;
+      }
+    }
+
+    // 6. TLD blacklist
+    if (passed && this.options.tldBlacklist.length > 0 && topDomain) {
+      const tld = topDomain.split('.').pop() || '';
+      if (this.options.tldBlacklist.includes(tld)) {
+        this.addReason(reasons, 'tld_blacklisted');
+        passed = false;
+      }
+    }
+
+    // 7. Domain whitelist
+    if (passed && this.options.domainWhitelist.length > 0 && domain) {
+      const matches = this.options.domainWhitelist.some(pattern =>
+        matchesPattern(domain, pattern) || matchesPattern(topDomain || '', pattern)
+      );
+      if (!matches) {
+        this.addReason(reasons, 'domain_not_whitelisted');
+        passed = false;
+      }
+    }
+
+    // 8. Domain blacklist
+    if (passed && this.options.domainBlacklist.length > 0 && domain) {
+      const matches = this.options.domainBlacklist.some(pattern =>
+        matchesPattern(domain, pattern) || matchesPattern(topDomain || '', pattern)
+      );
+      if (matches) {
+        this.addReason(reasons, 'domain_blacklisted');
+        passed = false;
+      }
+    }
+
+    // 9. Extension check
+    if (passed) {
+      const extension = this.extractExtension(url);
+      if (extension) {
+        if (this.options.extensionWhitelist.length > 0) {
+          if (!this.options.extensionWhitelist.includes(extension)) {
+            this.addReason(reasons, 'extension_not_whitelisted');
+            passed = false;
+          }
+        }
+        if (passed && this.options.extensionBlacklist.includes(extension)) {
+          this.addReason(reasons, 'extension_blacklisted');
           passed = false;
         }
-      } catch {
-        reasons.push('parse_error');
-        passed = false;
       }
     }
 
-    // 6. TLD whitelist check
-    if (passed && domain && this.tldWhitelist.size > 0) {
-      const tld = extractTld(domain).toLowerCase();
-      if (!this.tldWhitelist.has(tld)) {
-        reasons.push('tld_not_whitelisted');
-        passed = false;
-      }
-    }
-
-    // 7. TLD blacklist check
-    if (passed && domain && this.tldBlacklist.size > 0) {
-      const tld = extractTld(domain).toLowerCase();
-      if (this.tldBlacklist.has(tld)) {
-        reasons.push('tld_blacklisted');
-        passed = false;
-      }
-    }
-
-    // 8. Domain blacklist check
-    if (passed && domain) {
-      const normalizedDomain = normalizeDomain(domain);
-      const normalizedTop = normalizeDomain(topDomain);
-
-      for (const blacklisted of this.domainBlacklist) {
-        if (
-          normalizedDomain === blacklisted ||
-          normalizedTop === blacklisted ||
-          matchesDomainPattern(normalizedDomain, '*.' + blacklisted)
-        ) {
-          reasons.push('domain_blacklisted');
-          passed = false;
-          break;
-        }
-      }
-    }
-
-    // 9. Keyword include check (URL must contain at least one)
-    if (passed && this.keywordInclude.length > 0) {
-      const hasKeyword = this.keywordInclude.some(re => re.test(trimmedUrl));
+    // 10. Keyword include
+    if (passed && this.options.keywordInclude.length > 0) {
+      const urlLower = url.toLowerCase();
+      const hasKeyword = this.options.keywordInclude.some(kw =>
+        urlLower.includes(kw.toLowerCase())
+      );
       if (!hasKeyword) {
-        reasons.push('missing_required_keyword');
+        this.addReason(reasons, 'keyword_not_found');
         passed = false;
       }
     }
 
-    // 10. Keyword exclude check (URL must not contain any)
-    if (passed && this.keywordExclude.length > 0) {
-      const hasExcluded = this.keywordExclude.some(re => re.test(trimmedUrl));
+    // 11. Keyword exclude
+    if (passed && this.options.keywordExclude.length > 0) {
+      const urlLower = url.toLowerCase();
+      const hasExcluded = this.options.keywordExclude.some(kw =>
+        urlLower.includes(kw.toLowerCase())
+      );
       if (hasExcluded) {
-        reasons.push('contains_excluded_keyword');
+        this.addReason(reasons, 'keyword_excluded');
         passed = false;
       }
     }
 
-    // 11. Anti-public check
+    // 12. URL params only
+    if (passed && this.options.urlParamsOnly) {
+      if (!url.includes('?') || !url.includes('=')) {
+        this.addReason(reasons, 'no_params');
+        passed = false;
+      }
+    }
+
+    // 13. Anti-public filter
     if (passed && this.antiPublic && domain) {
-      const antiResult = this.antiPublic.filterUrl(trimmedUrl);
-      if (!antiResult.passed) {
-        reasons.push('public_domain');
+      if (this.antiPublic.isPublicDomain(domain)) {
+        this.addReason(reasons, 'public_domain');
         passed = false;
-      } else if (antiResult.isNew) {
-        this.stats.newDomains++;
       }
     }
 
-    // 12. Deduplication
+    // 14. Deduplication
     if (passed && this.options.removeDuplicates) {
-      const { isNew } = this.urlDedup.checkAndAdd(trimmedUrl);
-      if (!isNew) {
-        reasons.push('duplicate');
+      if (!this.urlDedup.add(url)) {
+        this.addReason(reasons, 'duplicate');
         passed = false;
       }
     }
 
-    // Track domains
-    if (passed && domain) {
-      this.domainDedup.addFromUrl(trimmedUrl);
-    }
-
-    // Record stats
+    // Update stats
     if (passed) {
       this.stats.passed++;
+      if (domain) {
+        this.domainDedup.addDomain(domain);
+      }
     } else {
       this.stats.filtered++;
-      for (const reason of reasons) {
-        this.recordReason(reason);
-      }
     }
 
     return {
-      url: trimmedUrl,
-      domain: domain || '',
+      url,
+      domain,
       topDomain,
       passed,
       reasons,
@@ -323,92 +304,83 @@ export class FilterPipeline {
   /**
    * Filter multiple URLs
    */
-  filterUrls(urls: string[]): {
-    passed: FilterResult[];
-    filtered: FilterResult[];
-    stats: FilterStats;
-  } {
-    const passed: FilterResult[] = [];
-    const filtered: FilterResult[] = [];
+  filter(urls: string[]): FilteredUrl[] {
+    const results: FilteredUrl[] = [];
 
     for (const url of urls) {
-      const result = this.filterUrl(url);
-      if (result.passed) {
-        passed.push(result);
-      } else {
-        filtered.push(result);
+      const result = this.filterOne(url);
+
+      if (result.passed && result.domain && result.topDomain) {
+        results.push({
+          url: result.url,
+          domain: result.domain,
+          topDomain: result.topDomain,
+          hasParams: url.includes('?'),
+          params: this.extractParams(url),
+          extension: this.extractExtension(url),
+        });
       }
     }
 
     // Update domain counts
-    const domainCounts = this.domainDedup.getCounts();
-    this.stats.uniqueDomains = domainCounts.domains;
-    this.stats.uniqueTopDomains = domainCounts.topDomains;
+    const counts = this.domainDedup.getCounts();
+    this.stats.uniqueDomains = counts.domains;
+    this.stats.uniqueTopDomains = counts.topDomains;
 
-    return {
-      passed,
-      filtered,
-      stats: { ...this.stats },
-    };
+    return results;
   }
 
   /**
-   * Quick filter - returns only passed URLs as strings
+   * Extract file extension from URL
    */
-  filter(urls: string[]): string[] {
-    return urls
-      .map(url => this.filterUrl(url))
-      .filter(result => result.passed)
-      .map(result => result.url);
-  }
-
-  /**
-   * Process URL and return detailed result
-   */
-  process(url: string): FilteredResult {
-    const result = this.filterUrl(url);
-    let params: Record<string, string> = {};
-    let extension = '';
-
+  private extractExtension(url: string): string | null {
     try {
-      const parsed = new URL(url.includes('://') ? url : 'http://' + url);
-      
-      // Extract params
-      parsed.searchParams.forEach((value, key) => {
-        params[key] = value;
-      });
+      const urlObj = new URL(url.includes('://') ? url : 'http://' + url);
+      const pathname = urlObj.pathname;
+      const lastDot = pathname.lastIndexOf('.');
 
-      // Extract extension
-      const pathParts = parsed.pathname.split('.');
-      if (pathParts.length > 1) {
-        extension = pathParts[pathParts.length - 1].split('/')[0].toLowerCase();
+      if (lastDot > 0 && lastDot < pathname.length - 1) {
+        const ext = pathname.substring(lastDot).toLowerCase();
+        // Only return if it looks like a file extension
+        if (ext.length <= 6 && /^\.[a-z0-9]+$/.test(ext)) {
+          return ext;
+        }
       }
     } catch {
-      // Ignore parse errors
+      // Ignore parsing errors
     }
-
-    return {
-      original: url,
-      cleaned: this.urlDedup.normalizeUrl(url),
-      domain: result.domain,
-      topDomain: result.topDomain,
-      hasParams: Object.keys(params).length > 0,
-      params,
-      extension,
-      filtered: !result.passed,
-      filterReason: result.reasons.join(', ') || undefined,
-    };
+    return null;
   }
 
   /**
-   * Get current statistics
+   * Extract query parameters from URL
+   */
+  private extractParams(url: string): string[] {
+    try {
+      const urlObj = new URL(url.includes('://') ? url : 'http://' + url);
+      return Array.from(urlObj.searchParams.keys());
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Add reason and track in stats
+   */
+  private addReason(reasons: string[], reason: string): void {
+    reasons.push(reason);
+    this.stats.byReason[reason] = (this.stats.byReason[reason] || 0) + 1;
+  }
+
+  /**
+   * Get statistics
    */
   getStats(): FilterStats {
-    const domainCounts = this.domainDedup.getCounts();
+    const counts = this.domainDedup.getCounts();
     return {
       ...this.stats,
-      uniqueDomains: domainCounts.domains,
-      uniqueTopDomains: domainCounts.topDomains,
+      uniqueDomains: counts.domains,
+      uniqueTopDomains: counts.topDomains,
     };
   }
 
@@ -427,39 +399,22 @@ export class FilterPipeline {
   }
 
   /**
-   * Reset the pipeline
+   * Reset all filters and stats
    */
   reset(): void {
     this.urlDedup.clear();
     this.domainDedup.clear();
-    this.stats = this.createEmptyStats();
-    logger.debug('Filter pipeline reset');
-  }
-
-  /**
-   * Add domain to blacklist
-   */
-  addToBlacklist(domain: string): void {
-    this.domainBlacklist.add(normalizeDomain(domain));
-  }
-
-  /**
-   * Add TLD to blacklist
-   */
-  addTldToBlacklist(tld: string): void {
-    this.tldBlacklist.add(tld.toLowerCase());
-  }
-
-  /**
-   * Check if URL would pass filters (without recording)
-   */
-  wouldPass(url: string): boolean {
-    // Create a temporary instance for checking
-    const tempPipeline = new FilterPipeline({
-      ...this.options,
-      removeDuplicates: false, // Don't affect dedup state
-    });
-    return tempPipeline.filterUrl(url).passed;
+    if (this.antiPublic) {
+      this.antiPublic.resetStats();
+    }
+    this.stats = {
+      total: 0,
+      passed: 0,
+      filtered: 0,
+      byReason: {},
+      uniqueDomains: 0,
+      uniqueTopDomains: 0,
+    };
   }
 
   /**
@@ -468,45 +423,47 @@ export class FilterPipeline {
   exportState(): object {
     return {
       stats: this.stats,
-      dedup: this.urlDedup.export(),
-      domains: this.domainDedup.getDomains(),
-      topDomains: this.domainDedup.getTopDomains(),
+      urlDedupState: this.urlDedup.exportState(),
+      domainDedupState: this.domainDedup.exportState(),
     };
+  }
+
+  /**
+   * Import state from persistence
+   */
+  importState(state: any): void {
+    if (state.stats) {
+      this.stats = state.stats;
+    }
+    if (state.urlDedupState) {
+      this.urlDedup.importState(state.urlDedupState);
+    }
+    if (state.domainDedupState) {
+      this.domainDedup.importState(state.domainDedupState);
+    }
   }
 }
 
 // Singleton instance
-let pipelineInstance: FilterPipeline | null = null;
+let filterPipelineInstance: FilterPipeline | null = null;
 
-/**
- * Get or create pipeline instance
- */
 export function getFilterPipeline(options?: Partial<FilterPipelineOptions>): FilterPipeline {
-  if (!pipelineInstance) {
-    pipelineInstance = new FilterPipeline(options);
+  if (!filterPipelineInstance) {
+    filterPipelineInstance = new FilterPipeline(options);
   }
-  return pipelineInstance;
+  return filterPipelineInstance;
 }
 
-/**
- * Reset pipeline instance
- */
 export function resetFilterPipeline(): void {
-  if (pipelineInstance) {
-    pipelineInstance.reset();
-    pipelineInstance = null;
+  if (filterPipelineInstance) {
+    filterPipelineInstance.reset();
+    filterPipelineInstance = null;
   }
 }
 
-/**
- * Quick filter function
- */
-export function filterUrls(
-  urls: string[],
-  options?: Partial<FilterPipelineOptions>
-): string[] {
-  const pipeline = new FilterPipeline(options);
-  return pipeline.filter(urls);
-}
+// Re-export sub-modules
+export * from './domain.js';
+export * from './dedup.js';
+export { AntiPublicFilter, getAntiPublicFilter } from './antiPublic.js';
 
 export default FilterPipeline;
