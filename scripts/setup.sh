@@ -1,6 +1,3 @@
-cd ~/dorker/scripts
-
-cat > setup.sh << 'EOF'
 #!/bin/bash
 
 #═══════════════════════════════════════════════════════════════════════════════
@@ -253,8 +250,3 @@ main() {
 }
 
 main "$@"
-EOF
-
-chmod +x setup.sh
-
-echo "✓ Updated scripts/setup.sh"
