@@ -50,6 +50,7 @@
     "commander": "^11.1.0",
     "inquirer": "^9.2.12",
     "winston": "^3.11.0",
+    "winston-daily-rotate-file": "^4.7.1",
     "dayjs": "^1.11.10",
     "lodash-es": "^4.17.21",
     "nanoid": "^5.0.4",
@@ -67,6 +68,7 @@
   },
   "devDependencies": {
     "@types/blessed": "^0.1.25",
+    "@types/blessed-contrib": "^4.8.5",
     "@types/better-sqlite3": "^7.6.8",
     "@types/cli-progress": "^3.11.5",
     "@types/figlet": "^1.5.8",
