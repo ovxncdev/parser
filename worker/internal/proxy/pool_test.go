@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -485,15 +486,4 @@ func TestPoolGetAllMethods(t *testing.T) {
 	if len(dead) != 0 {
 		t.Errorf("dead count = %d, want 0", len(dead))
 	}
-}
-
-// Helper for concurrent test
-func fmt_Sprintf(format string, a ...interface{}) string {
-	return fmt.Sprintf(format, a...)
-}
-
-var fmt = struct {
-	Sprintf func(format string, a ...interface{}) string
-}{
-	Sprintf: fmt_Sprintf,
 }
