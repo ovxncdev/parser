@@ -3,95 +3,194 @@ import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 export class OutputWriter {
-  constructor(config) {
-    this.config = {
-      format: 'txt',
+  constructor(options = {}) {
+    this.options = {
       directory: './output',
       prefix: 'dorker',
+      format: 'txt',  // txt, json, csv, jsonl
       splitByDork: false,
-      ...config,
+      ...options
     };
-    this.streams = new Map();
-    this.buffer = [];
-    this.totalWritten = 0;
-    this.outputFiles = [];
 
-    if (!existsSync(this.config.directory)) {
-      mkdirSync(this.config.directory, { recursive: true });
+    this.streams = new Map();
+    this.files = [];
+    this.counts = {
+      urls: 0,
+      domains: 0
+    };
+
+    // Create output directory
+    const dateDir = new Date().toISOString().split('T')[0];
+    this.outputDir = path.join(this.options.directory, dateDir);
+    
+    if (!existsSync(this.outputDir)) {
+      mkdirSync(this.outputDir, { recursive: true });
     }
   }
 
-  getStream(suffix = 'results') {
-    if (this.streams.has(suffix)) return this.streams.get(suffix);
+  getStream(name) {
+    if (this.streams.has(name)) {
+      return this.streams.get(name);
+    }
 
-    const date = new Date().toISOString().split('T')[0];
-    const ext = this.config.format === 'jsonl' ? 'jsonl' : this.config.format;
-    const filename = `${this.config.prefix}_${suffix}_${date}.${ext}`;
-    const filepath = path.join(this.config.directory, filename);
-
+    const ext = this.options.format === 'jsonl' ? 'jsonl' : this.options.format;
+    const filename = `${this.options.prefix}_${name}.${ext}`;
+    const filepath = path.join(this.outputDir, filename);
+    
     const stream = createWriteStream(filepath, { flags: 'a' });
-    this.streams.set(suffix, stream);
-    this.outputFiles.push(filepath);
+    this.streams.set(name, stream);
+    this.files.push(filepath);
+    
     return stream;
   }
 
-  formatResult(result) {
-    switch (this.config.format) {
+  formatLine(url, metadata = {}) {
+    switch (this.options.format) {
       case 'json':
       case 'jsonl':
-        return JSON.stringify(result);
+        return JSON.stringify({ url, ...metadata });
       case 'csv':
-        return `"${result.url}","${result.dork || ''}","${result.timestamp || ''}"`;
+        const dork = (metadata.dork || '').replace(/"/g, '""');
+        return `"${url}","${dork}","${metadata.timestamp || ''}"`;
       default:
-        return result.url;
+        return url;
     }
   }
 
-  write(result) {
-    const stream = this.getStream();
-    stream.write(this.formatResult(result) + '\n');
-    this.totalWritten++;
+  writeUrl(url, metadata = {}) {
+    const stream = this.getStream('results');
+    stream.write(this.formatLine(url, metadata) + '\n');
+    this.counts.urls++;
   }
 
-  writeMany(results) {
-    results.forEach(r => this.write(r));
+  writeUrls(urls, dork = '') {
+    const stream = this.getStream('results');
+    const timestamp = Date.now();
+    
+    for (const url of urls) {
+      stream.write(this.formatLine(url, { dork, timestamp }) + '\n');
+      this.counts.urls++;
+    }
+  }
+
+  writeDomain(domain) {
+    const stream = this.getStream('domains');
+    stream.write(domain + '\n');
+    this.counts.domains++;
+  }
+
+  writeDomains(domains) {
+    const stream = this.getStream('domains');
+    for (const domain of domains) {
+      stream.write(domain + '\n');
+      this.counts.domains++;
+    }
+  }
+
+  writeRaw(url) {
+    const stream = this.getStream('raw');
+    stream.write(url + '\n');
+  }
+
+  writeWithParams(url) {
+    const stream = this.getStream('urls-with-params');
+    stream.write(url + '\n');
   }
 
   async writeFailedDorks(dorks) {
-    const date = new Date().toISOString().split('T')[0];
-    const filepath = path.join(this.config.directory, `${this.config.prefix}_failed_${date}.txt`);
+    const filepath = path.join(this.outputDir, `${this.options.prefix}_failed.txt`);
     await writeFile(filepath, dorks.join('\n'), 'utf-8');
-    this.outputFiles.push(filepath);
+    this.files.push(filepath);
   }
 
-  async writeSummary(stats, filterStats, duration, files) {
-    const summary = { stats, filterStats, duration, files, timestamp: new Date().toISOString() };
-    const date = new Date().toISOString().split('T')[0];
-    const filepath = path.join(this.config.directory, `${this.config.prefix}_summary_${date}.json`);
+  async writeSummary(stats) {
+    const summary = {
+      timestamp: new Date().toISOString(),
+      duration: stats.duration,
+      dorks: {
+        total: stats.totalDorks,
+        completed: stats.completed,
+        failed: stats.failed
+      },
+      urls: {
+        raw: stats.rawUrls,
+        filtered: stats.filteredUrls,
+        domains: stats.uniqueDomains
+      },
+      proxies: {
+        total: stats.proxiesTotal,
+        alive: stats.proxiesAlive
+      },
+      performance: {
+        requestsPerMin: stats.requestsPerMin,
+        successRate: stats.successRate
+      },
+      files: this.files
+    };
+
+    const filepath = path.join(this.outputDir, `${this.options.prefix}_summary.json`);
     await writeFile(filepath, JSON.stringify(summary, null, 2), 'utf-8');
+    this.files.push(filepath);
   }
 
   async close() {
-    for (const stream of this.streams.values()) {
-      await new Promise(resolve => stream.end(resolve));
+    const closePromises = [];
+    
+    for (const [name, stream] of this.streams) {
+      closePromises.push(new Promise((resolve, reject) => {
+        stream.end((err) => {
+          if (err) reject(err);
+          else resolve();
+        });
+      }));
     }
+
+    await Promise.all(closePromises);
+    this.streams.clear();
   }
 
-  getTotalWritten() { return this.totalWritten; }
-  getOutputFiles() { return this.outputFiles; }
+  getOutputDir() {
+    return this.outputDir;
+  }
+
+  getFiles() {
+    return this.files;
+  }
+
+  getCounts() {
+    return { ...this.counts };
+  }
 }
 
-export function createOutputWriter(config) {
-  return new OutputWriter(config);
-}
-
-export function formatDuration(ms) {
-  if (ms < 1000) return `${ms}ms`;
-  if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
-  if (ms < 3600000) return `${Math.floor(ms / 60000)}m ${Math.floor((ms % 60000) / 1000)}s`;
-  return `${Math.floor(ms / 3600000)}h ${Math.floor((ms % 3600000) / 60000)}m`;
-}
+// ─────────────────────────────────────────────────────────────
+// Utility functions
+// ─────────────────────────────────────────────────────────────
 
 export function formatNumber(num) {
   return num.toLocaleString();
 }
+
+export function formatDuration(ms) {
+  if (!ms || ms < 0) return '0s';
+  
+  const seconds = Math.floor(ms / 1000);
+  const minutes = Math.floor(seconds / 60);
+  const hours = Math.floor(minutes / 60);
+
+  if (hours > 0) {
+    return `${hours}h ${minutes % 60}m ${seconds % 60}s`;
+  } else if (minutes > 0) {
+    return `${minutes}m ${seconds % 60}s`;
+  }
+  return `${seconds}s`;
+}
+
+export function formatBytes(bytes) {
+  if (bytes === 0) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+}
+
+export default OutputWriter;
