@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
 import { Command } from 'commander';
-import { readFile, access, constants, mkdir } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { readFile, access, constants } from 'node:fs/promises';
+import { existsSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -13,10 +13,6 @@ import { OutputWriter, formatNumber, formatDuration } from './output.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const VERSION = '1.0.0';
-
-// ─────────────────────────────────────────────────────────────
-// CLI Setup
-// ─────────────────────────────────────────────────────────────
 
 const program = new Command();
 
@@ -41,7 +37,7 @@ program
   .option('--no-dedup', 'Disable URL deduplication')
   .option('--no-domain-dedup', 'Disable domain deduplication')
   .option('--params-only', 'Keep only URLs with parameters')
-  .option('--no-ui', 'Disable fancy UI (use simple output)')
+  .option('--no-ui', 'Disable fancy UI')
   .option('--format <type>', 'Output format: txt, json, csv, jsonl', 'txt')
   .action(runCommand);
 
@@ -52,42 +48,38 @@ program
   .requiredOption('-p, --proxies <file>', 'Path to proxies file')
   .action(validateCommand);
 
-// ─────────────────────────────────────────────────────────────
-// Run Command
-// ─────────────────────────────────────────────────────────────
-
 async function runCommand(opts) {
   const startTime = Date.now();
   const useUI = opts.ui !== false && process.stdout.isTTY;
 
-  // Validate files exist
+  // Validate files
   try {
     await access(opts.dorks, constants.R_OK);
     await access(opts.proxies, constants.R_OK);
   } catch (err) {
     console.error('Error: Cannot read dorks or proxies file');
-    console.error(err.message);
     process.exit(1);
   }
 
-  // Find worker binary
+  // Find worker
   const workerPath = findWorker();
   if (!workerPath) {
-    console.error('Error: Worker binary not found.');
-    console.error('Run "make build-worker" in the project root first.');
+    console.error('Error: Worker binary not found. Run "make build-worker" first.');
     process.exit(1);
   }
 
   // Load dorks
   const dorksContent = await readFile(opts.dorks, 'utf-8');
-  const dorks = dorksContent
-    .split('\n')
-    .map(l => l.trim())
-    .filter(l => l && !l.startsWith('#'));
+  const dorks = dorksContent.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#'));
 
   if (dorks.length === 0) {
-    console.error('Error: No dorks found in file');
+    console.error('Error: No dorks found');
     process.exit(1);
+  }
+
+  // Create output dir
+  if (!existsSync(opts.output)) {
+    mkdirSync(opts.output, { recursive: true });
   }
 
   // Initialize components
@@ -105,7 +97,7 @@ async function runCommand(opts) {
 
   const worker = new WorkerIPC(workerPath);
 
-  // Initialize UI or simple console
+  // UI or console
   let ui = null;
   if (useUI) {
     ui = new DorkerUI();
@@ -113,12 +105,12 @@ async function runCommand(opts) {
     ui.showInitPhase();
   } else {
     showBanner();
-    console.log(`Loading ${formatNumber(dorks.length)} dorks...`);
+    console.log(`Dorks: ${formatNumber(dorks.length)}`);
     console.log(`Worker: ${workerPath}`);
     console.log('');
   }
 
-  // State tracking
+  // State
   const state = {
     completed: 0,
     failed: 0,
@@ -128,34 +120,15 @@ async function runCommand(opts) {
     failedDorks: []
   };
 
-  // ─────────────────────────────────────────────────────────────
-  // Worker Events
-  // ─────────────────────────────────────────────────────────────
-
-  worker.on('ready', () => {
-    log(ui, 'success', 'Worker connected');
-
-    worker.init({
-      workers: parseInt(opts.workers),
-      timeout: parseInt(opts.timeout),
-      baseDelay: parseInt(opts.baseDelay),
-      minDelay: parseInt(opts.minDelay),
-      maxDelay: parseInt(opts.maxDelay),
-      maxRetries: parseInt(opts.maxRetries),
-      resultsPerPage: 100,
-      proxyFile: path.resolve(opts.proxies)
-    });
-  });
-
+  // Worker events - status handles ready/initialized
   worker.on('status', (status, message) => {
-    if (status === 'initialized') {
+    if (status === 'ready') {
+      log(ui, 'success', 'Worker ready');
+    } else if (status === 'initialized') {
       log(ui, 'success', `Initialized: ${message}`);
-      
-      if (ui) {
-        ui.showRunning();
-      }
+      if (ui) ui.showRunning();
 
-      // Submit all dorks
+      // Submit tasks
       worker.submitTasks(dorks);
       log(ui, 'info', `Submitted ${formatNumber(dorks.length)} tasks`);
     } else if (status === 'paused') {
@@ -174,11 +147,9 @@ async function runCommand(opts) {
       state.completed++;
       state.urlsRaw += urls.length;
 
-      // Filter and save URLs
       if (urls.length > 0) {
         const filtered = filter.filter(urls);
         state.urlsFiltered += filtered.length;
-
         for (const url of filtered) {
           output.writeUrl(url, { dork, timestamp: Date.now() });
         }
@@ -202,14 +173,11 @@ async function runCommand(opts) {
 
   worker.on('stats', (stats) => {
     state.lastStats = stats;
-
     if (ui) {
       ui.updateStats({
         requestsPerMin: Math.round(stats.requestsPerSec * 60),
         successRate: stats.tasksCompleted > 0 
-          ? (stats.tasksCompleted / (stats.tasksCompleted + stats.tasksFailed)) * 100 
-          : 0,
-        activeProxies: 0,  // Updated via proxy_info
+          ? (stats.tasksCompleted / (stats.tasksCompleted + stats.tasksFailed)) * 100 : 0,
         urlsFound: state.urlsFiltered,
         uniqueDomains: filter.getStats().uniqueDomains
       });
@@ -223,11 +191,9 @@ async function runCommand(opts) {
       ui.updateProgress(progress.current, progress.total);
       ui.updateResults(state.urlsRaw, state.urlsFiltered, filter.getStats().uniqueDomains);
     } else {
-      const pct = progress.percentage.toFixed(1);
-      process.stdout.write(`\rProgress: ${progress.current}/${progress.total} (${pct}%) - ${state.urlsFiltered} URLs   `);
+      process.stdout.write(`\rProgress: ${progress.current}/${progress.total} (${progress.percentage.toFixed(1)}%) - ${state.urlsFiltered} URLs   `);
     }
 
-    // Check completion
     if (progress.current >= progress.total && progress.total > 0) {
       finish();
     }
@@ -237,19 +203,12 @@ async function runCommand(opts) {
     if (ui) {
       ui.updateProxies(info.alive, info.dead, info.quarantined);
     } else {
-      console.log(`\nProxies: ${info.alive} alive, ${info.dead} dead, ${info.quarantined} quarantined`);
+      log(ui, 'info', `Proxies: ${info.alive} alive, ${info.dead} dead`);
     }
   });
 
   worker.on('error', (code, message) => {
     log(ui, 'error', `[${code}] ${message}`);
-  });
-
-  worker.on('log', (level, message) => {
-    // Debug logs - only show if no UI
-    if (!ui && level === 'debug') {
-      console.log(`[DEBUG] ${message}`);
-    }
   });
 
   worker.on('close', (code) => {
@@ -259,47 +218,34 @@ async function runCommand(opts) {
     finish();
   });
 
-  // ─────────────────────────────────────────────────────────────
-  // UI Callbacks
-  // ─────────────────────────────────────────────────────────────
-
+  // UI callbacks
   if (ui) {
     ui.setCallbacks({
       onPause: () => worker.pause(),
       onResume: () => worker.resume(),
-      onQuit: () => {
-        worker.shutdown();
-        setTimeout(finish, 1000);
-      }
+      onQuit: () => { worker.shutdown(); setTimeout(finish, 1000); }
     });
   }
 
   // Stats polling
   const statsInterval = setInterval(() => {
-    if (worker.isConnected()) {
-      worker.getStats();
-    }
+    if (worker.isConnected()) worker.getStats();
   }, 1000);
 
-  // ─────────────────────────────────────────────────────────────
-  // Finish
-  // ─────────────────────────────────────────────────────────────
-
+  // Finish handler
   let finished = false;
   async function finish() {
     if (finished) return;
     finished = true;
-
     clearInterval(statsInterval);
-    const duration = Date.now() - startTime;
 
-    // Save failed dorks
+    const duration = Date.now() - startTime;
+    const filterStats = filter.getStats();
+
     if (state.failedDorks.length > 0) {
       await output.writeFailedDorks(state.failedDorks);
     }
 
-    // Save summary
-    const filterStats = filter.getStats();
     await output.writeSummary({
       duration,
       totalDorks: dorks.length,
@@ -307,11 +253,7 @@ async function runCommand(opts) {
       failed: state.failed,
       rawUrls: state.urlsRaw,
       filteredUrls: state.urlsFiltered,
-      uniqueDomains: filterStats.uniqueDomains,
-      proxiesTotal: state.lastStats?.proxiesTotal || 0,
-      proxiesAlive: state.lastStats?.proxiesAlive || 0,
-      requestsPerMin: state.lastStats?.requestsPerSec ? Math.round(state.lastStats.requestsPerSec * 60) : 0,
-      successRate: state.completed > 0 ? (state.completed / (state.completed + state.failed)) * 100 : 0
+      uniqueDomains: filterStats.uniqueDomains
     });
 
     await output.close();
@@ -333,101 +275,66 @@ async function runCommand(opts) {
       console.log('═══════════════════════════════════════════════════════════════');
       console.log('                         COMPLETE');
       console.log('═══════════════════════════════════════════════════════════════');
-      console.log(`  Duration:     ${formatDuration(duration)}`);
-      console.log(`  Dorks:        ${state.completed} completed, ${state.failed} failed`);
-      console.log(`  URLs:         ${formatNumber(state.urlsFiltered)} saved`);
-      console.log(`  Domains:      ${formatNumber(filterStats.uniqueDomains)} unique`);
-      console.log(`  Output:       ${output.getOutputDir()}`);
+      console.log(`  Duration: ${formatDuration(duration)}`);
+      console.log(`  Dorks:    ${state.completed} completed, ${state.failed} failed`);
+      console.log(`  URLs:     ${formatNumber(state.urlsFiltered)} saved`);
+      console.log(`  Domains:  ${formatNumber(filterStats.uniqueDomains)} unique`);
+      console.log(`  Output:   ${output.getOutputDir()}`);
       console.log('═══════════════════════════════════════════════════════════════');
       process.exit(0);
     }
   }
 
-  // ─────────────────────────────────────────────────────────────
-  // Signal Handlers
-  // ─────────────────────────────────────────────────────────────
+  process.on('SIGINT', () => { worker.shutdown(); setTimeout(finish, 1000); });
+  process.on('SIGTERM', () => { worker.shutdown(); setTimeout(finish, 1000); });
 
-  process.on('SIGINT', () => {
-    log(ui, 'warning', 'Interrupted, saving progress...');
-    worker.shutdown();
-    setTimeout(finish, 1000);
-  });
-
-  process.on('SIGTERM', () => {
-    worker.shutdown();
-    setTimeout(finish, 1000);
-  });
-
-  // ─────────────────────────────────────────────────────────────
-  // Start Worker
-  // ─────────────────────────────────────────────────────────────
-
+  // Start worker and send init immediately
   try {
     await worker.start();
+    
+    // Send init right after start
+    log(ui, 'info', 'Sending init to worker...');
+    worker.init({
+      workers: parseInt(opts.workers),
+      timeout: parseInt(opts.timeout),
+      baseDelay: parseInt(opts.baseDelay),
+      minDelay: parseInt(opts.minDelay),
+      maxDelay: parseInt(opts.maxDelay),
+      maxRetries: parseInt(opts.maxRetries),
+      resultsPerPage: 100,
+      proxyFile: path.resolve(opts.proxies)
+    });
   } catch (err) {
-    log(ui, 'error', `Failed to start worker: ${err.message}`);
-    if (ui) {
-      setTimeout(() => process.exit(1), 2000);
-    } else {
-      process.exit(1);
-    }
+    log(ui, 'error', `Failed to start: ${err.message}`);
+    process.exit(1);
   }
 }
-
-// ─────────────────────────────────────────────────────────────
-// Validate Command
-// ─────────────────────────────────────────────────────────────
 
 async function validateCommand(opts) {
   showBanner();
-  console.log('Validating files...\n');
+  console.log('Validating...\n');
 
-  // Check dorks
-  console.log(`Dorks: ${opts.dorks}`);
-  try {
-    await access(opts.dorks, constants.R_OK);
-    const content = await readFile(opts.dorks, 'utf-8');
-    const lines = content.split('\n').filter(l => l.trim() && !l.startsWith('#'));
-    const unique = new Set(lines);
-    console.log(`  ✓ ${formatNumber(lines.length)} dorks`);
-    if (unique.size < lines.length) {
-      console.log(`  ⚠ ${lines.length - unique.size} duplicates`);
+  for (const [name, file] of [['Dorks', opts.dorks], ['Proxies', opts.proxies]]) {
+    console.log(`${name}: ${file}`);
+    try {
+      await access(file, constants.R_OK);
+      const content = await readFile(file, 'utf-8');
+      const lines = content.split('\n').filter(l => l.trim() && !l.startsWith('#'));
+      console.log(`  ✓ ${formatNumber(lines.length)} entries`);
+    } catch {
+      console.log('  ✗ Cannot read');
     }
-  } catch {
-    console.log('  ✗ Cannot read file');
   }
-
-  console.log('');
-
-  // Check proxies
-  console.log(`Proxies: ${opts.proxies}`);
-  try {
-    await access(opts.proxies, constants.R_OK);
-    const content = await readFile(opts.proxies, 'utf-8');
-    const lines = content.split('\n').filter(l => l.trim() && !l.startsWith('#'));
-    console.log(`  ✓ ${formatNumber(lines.length)} proxies`);
-  } catch {
-    console.log('  ✗ Cannot read file');
-  }
-
   console.log('\nDone.');
 }
-
-// ─────────────────────────────────────────────────────────────
-// Helpers
-// ─────────────────────────────────────────────────────────────
 
 function findWorker() {
   const paths = [
     path.join(process.cwd(), 'bin', 'worker'),
     path.join(process.cwd(), '..', 'bin', 'worker'),
     path.join(__dirname, '..', '..', 'bin', 'worker'),
-    path.join(__dirname, '..', '..', '..', 'bin', 'worker')
   ];
-
-  for (const p of paths) {
-    if (existsSync(p)) return p;
-  }
+  for (const p of paths) if (existsSync(p)) return p;
   return null;
 }
 
@@ -439,9 +346,5 @@ function log(ui, type, message) {
     console.log(`${prefix} ${message}`);
   }
 }
-
-// ─────────────────────────────────────────────────────────────
-// Run
-// ─────────────────────────────────────────────────────────────
 
 program.parse();
