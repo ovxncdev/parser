@@ -1,0 +1,145 @@
+#═══════════════════════════════════════════════════════════════════════════════
+# Dorker Configuration
+# Copy this file to your project directory and customize as needed
+#═══════════════════════════════════════════════════════════════════════════════
+
+#───────────────────────────────────────────────────────────────────────────────
+# Concurrency Settings
+#───────────────────────────────────────────────────────────────────────────────
+
+# Number of concurrent workers (goroutines)
+# Recommended: 1 worker per 10 proxies, max 200
+workers: 10
+
+# Request timeout in milliseconds
+# Increase for slow proxies, decrease for faster throughput
+timeout: 30000
+
+# Delay settings (milliseconds)
+# Controls timing between requests to avoid detection
+baseDelay: 8000    # Base delay between requests
+minDelay: 3000     # Minimum delay (with jitter)
+maxDelay: 15000    # Maximum delay (with jitter)
+
+# Retry settings
+maxRetries: 3      # Max retries per failed dork
+
+# Results per Google search page (10-100)
+resultsPerPage: 100
+
+#───────────────────────────────────────────────────────────────────────────────
+# Proxy Settings
+#───────────────────────────────────────────────────────────────────────────────
+
+proxy:
+  # Maximum consecutive failures before quarantine
+  maxFailures: 5
+  
+  # Cooldown duration after CAPTCHA (milliseconds)
+  cooldownDuration: 30000
+  
+  # Quarantine duration for bad proxies (milliseconds)
+  quarantineDuration: 300000
+  
+  # Health check interval (milliseconds)
+  healthCheckInterval: 60000
+  
+  # Minimum success rate to stay active (percentage)
+  minSuccessRate: 50
+
+#───────────────────────────────────────────────────────────────────────────────
+# Filter Settings
+#───────────────────────────────────────────────────────────────────────────────
+
+filters:
+  # Filter out common public domains (Google, Facebook, YouTube, etc.)
+  antiPublic: true
+  
+  # Keep only one URL per unique domain
+  removeDuplicateDomains: true
+  
+  # Clean Google redirect URLs to get actual target
+  noRedirectUrls: true
+  
+  # Keep only URLs that have query parameters
+  urlParametersOnly: false
+  
+  # Extract just root domain (removes path and params)
+  cleanTopDomains: false
+  
+  # Save unfiltered results to separate file
+  keepUnfiltered: true
+  
+  # Custom anti-public domains file (one domain per line)
+  # antiPublicFile: ./custom-domains.txt
+
+#───────────────────────────────────────────────────────────────────────────────
+# Output Settings
+#───────────────────────────────────────────────────────────────────────────────
+
+output:
+  # Output format: txt, json, csv, jsonl
+  format: txt
+  
+  # Output directory
+  directory: ./output
+  
+  # Output file prefix
+  prefix: dorker
+  
+  # Create separate output file for each dork
+  splitByDork: false
+  
+  # Include metadata (timestamp, dork, position) in output
+  includeMetadata: false
+
+#───────────────────────────────────────────────────────────────────────────────
+# Stealth Settings
+#───────────────────────────────────────────────────────────────────────────────
+
+stealth:
+  # Rotate browser fingerprint every N requests
+  rotateEvery: 100
+  
+  # Enable JA3 fingerprint spoofing
+  ja3Spoofing: true
+  
+  # Add jitter to delays (percentage, 0.0-1.0)
+  jitterPercent: 0.3
+
+#───────────────────────────────────────────────────────────────────────────────
+# Logging Settings
+#───────────────────────────────────────────────────────────────────────────────
+
+logging:
+  # Log level: debug, info, warn, error
+  level: info
+  
+  # Enable console logging
+  console: true
+  
+  # Enable file logging
+  file: true
+  
+  # Log directory
+  directory: ./logs
+  
+  # Use JSON format for logs
+  json: false
+
+#───────────────────────────────────────────────────────────────────────────────
+# Advanced Settings
+#───────────────────────────────────────────────────────────────────────────────
+
+advanced:
+  # Enable checkpoint/resume functionality
+  enableCheckpoint: true
+  
+  # Checkpoint save interval (milliseconds)
+  checkpointInterval: 10000
+  
+  # Maximum URLs to keep in memory before flushing
+  bufferSize: 1000
+  
+  # Flush interval for output buffer (milliseconds)
+  flushInterval: 5000
