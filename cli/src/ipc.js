@@ -72,7 +72,6 @@ export class WorkerIPC extends EventEmitter {
     switch (type) {
       case 'status':
         if (data?.status === 'ready') {
-          // Worker acknowledged init, now fully ready
           if (this._startupTimeout) {
             clearTimeout(this._startupTimeout);
             this._startupTimeout = null;
@@ -81,18 +80,13 @@ export class WorkerIPC extends EventEmitter {
             this._startupResolve();
             this._startupResolve = null;
           }
-          this.emit('ready');
-        } else if (data?.status === 'initialized') {
+        }
+        if (data?.status === 'initialized') {
           this.initialized = true;
           this.flushQueue();
-          this.emit('initialized', data?.message);
-        } else if (data?.status === 'paused') {
-          this.emit('paused');
-        } else if (data?.status === 'resumed') {
-          this.emit('resumed');
-        } else {
-          this.emit('status', data?.status, data?.message);
         }
+        // Always emit status event
+        this.emit('status', data?.status, data?.message);
         break;
 
       case 'result':
