@@ -1,0 +1,10 @@
+inurl:admin
+inurl:login
+inurl:dashboard
+filetype:pdf confidential
+filetype:xls password
+intitle:"index of"
+inurl:config.php
+inurl:wp-admin
+site:edu filetype:pdf
+inurl:phpmyadmin
