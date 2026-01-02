@@ -5,7 +5,6 @@
 
 import blessed from 'blessed';
 import contrib from 'blessed-contrib';
-import chalk from 'chalk';
 import type { SchedulerStats } from '../orchestrator/scheduler.js';
 
 // Dashboard state
@@ -39,9 +38,6 @@ interface DashboardState {
   };
 }
 
-/**
- * Real-time Dashboard using blessed
- */
 export class Dashboard {
   private screen: blessed.Widgets.Screen | null = null;
   private grid: any = null;
@@ -50,13 +46,13 @@ export class Dashboard {
     progress?: any;
     stats?: blessed.Widgets.BoxElement;
     chart?: any;
-    activity?: blessed.Widgets.Log;
+    activity?: any;
     alert?: blessed.Widgets.BoxElement;
     footer?: blessed.Widgets.BoxElement;
   } = {};
   private state: DashboardState;
   private updateInterval: NodeJS.Timeout | null = null;
-  private startTime: Date | null = null;
+  private eventHandlers: Map<string, Function[]> = new Map();
 
   constructor() {
     this.state = {
@@ -70,18 +66,13 @@ export class Dashboard {
     };
   }
 
-  /**
-   * Initialize the dashboard
-   */
   init(): void {
-    // Create screen
     this.screen = blessed.screen({
       smartCSR: true,
       title: 'DORKER - Google Dork Parser',
       fullUnicode: true,
     });
 
-    // Create grid layout
     this.grid = new contrib.grid({
       rows: 12,
       cols: 12,
@@ -90,18 +81,12 @@ export class Dashboard {
 
     this.createWidgets();
     this.setupKeyBindings();
-    
-    // Initial render
     this.screen.render();
   }
 
-  /**
-   * Create all dashboard widgets
-   */
   private createWidgets(): void {
     if (!this.grid || !this.screen) return;
 
-    // Header with ASCII art
     this.widgets.header = blessed.box({
       parent: this.screen,
       top: 0,
@@ -111,12 +96,9 @@ export class Dashboard {
       content: this.getHeaderContent(),
       tags: true,
       border: { type: 'line' },
-      style: {
-        border: { fg: 'cyan' },
-      },
+      style: { border: { fg: 'cyan' } },
     });
 
-    // Progress bar
     this.widgets.progress = this.grid.set(3, 0, 2, 8, contrib.gauge, {
       label: ' PROGRESS ',
       stroke: 'cyan',
@@ -124,7 +106,6 @@ export class Dashboard {
       border: { type: 'line', fg: 'cyan' },
     });
 
-    // Stats box
     this.widgets.stats = this.grid.set(3, 8, 4, 4, blessed.box, {
       label: ' LIVE STATS ',
       tags: true,
@@ -132,7 +113,6 @@ export class Dashboard {
       style: { border: { fg: 'cyan' } },
     });
 
-    // Request rate chart
     this.widgets.chart = this.grid.set(5, 0, 3, 8, contrib.sparkline, {
       label: ' REQUESTS/SEC (Last 60s) ',
       tags: true,
@@ -140,7 +120,6 @@ export class Dashboard {
       style: { fg: 'cyan' },
     });
 
-    // Activity log
     this.widgets.activity = this.grid.set(7, 0, 4, 8, contrib.log, {
       label: ' RECENT ACTIVITY ',
       tags: true,
@@ -149,7 +128,6 @@ export class Dashboard {
       bufferLength: 50,
     });
 
-    // Alert box (hidden by default)
     this.widgets.alert = blessed.box({
       parent: this.screen,
       top: 'center',
@@ -159,13 +137,9 @@ export class Dashboard {
       hidden: true,
       tags: true,
       border: { type: 'line' },
-      style: {
-        border: { fg: 'red' },
-        bg: 'black',
-      },
+      style: { border: { fg: 'red' }, bg: 'black' },
     });
 
-    // Footer with controls
     this.widgets.footer = blessed.box({
       parent: this.screen,
       bottom: 0,
@@ -178,9 +152,6 @@ export class Dashboard {
     });
   }
 
-  /**
-   * Get header content with ASCII art
-   */
   private getHeaderContent(): string {
     return `{center}{cyan-fg}
 ██████╗  ██████╗ ██████╗ ██╗  ██╗███████╗██████╗ 
@@ -193,39 +164,19 @@ export class Dashboard {
 {white-fg}Google Dork Parser v1.0.0{/}{/center}`;
   }
 
-  /**
-   * Setup keyboard bindings
-   */
   private setupKeyBindings(): void {
     if (!this.screen) return;
 
-    // Quit
     this.screen.key(['q', 'C-c'], () => {
       this.destroy();
       process.exit(0);
     });
 
-    // Pause
-    this.screen.key(['p'], () => {
-      this.emit('pause');
-    });
+    this.screen.key(['p'], () => { this.emit('pause'); });
+    this.screen.key(['r'], () => { this.emit('resume'); });
+    this.screen.key(['s'], () => { this.emit('save'); });
+    this.screen.key(['h'], () => { this.showHelp(); });
 
-    // Resume
-    this.screen.key(['r'], () => {
-      this.emit('resume');
-    });
-
-    // Save & Quit
-    this.screen.key(['s'], () => {
-      this.emit('save');
-    });
-
-    // Help
-    this.screen.key(['h'], () => {
-      this.showHelp();
-    });
-
-    // Enter to dismiss alerts
     this.screen.key(['enter'], () => {
       if (this.widgets.alert && !this.widgets.alert.hidden) {
         this.widgets.alert.hide();
@@ -234,11 +185,6 @@ export class Dashboard {
     });
   }
 
-  private eventHandlers: Map<string, Function[]> = new Map();
-
-  /**
-   * Register event handler
-   */
   on(event: string, handler: Function): void {
     if (!this.eventHandlers.has(event)) {
       this.eventHandlers.set(event, []);
@@ -246,9 +192,6 @@ export class Dashboard {
     this.eventHandlers.get(event)!.push(handler);
   }
 
-  /**
-   * Emit event
-   */
   private emit(event: string, ...args: any[]): void {
     const handlers = this.eventHandlers.get(event);
     if (handlers) {
@@ -256,13 +199,9 @@ export class Dashboard {
     }
   }
 
-  /**
-   * Show initialization phase
-   */
   showInit(config: { dorks: number; proxies: number; workers: number; pagesPerDork: number }): void {
     this.state.phase = 'init';
     this.state.config = config;
-    this.startTime = new Date();
 
     if (this.widgets.stats) {
       this.widgets.stats.setContent(`
@@ -280,9 +219,6 @@ export class Dashboard {
     this.render();
   }
 
-  /**
-   * Show proxy checking phase
-   */
   showProxyCheck(checked: number, total: number, alive: number, dead: number, slow: number): void {
     this.state.phase = 'proxy_check';
     this.state.proxyStats = { total, alive, dead, slow, checked };
@@ -313,11 +249,8 @@ export class Dashboard {
     this.render();
   }
 
-  /**
-   * Show proxy check complete
-   */
   showProxyCheckComplete(): void {
-    const { alive, total, slow } = this.state.proxyStats;
+    const { alive, total } = this.state.proxyStats;
     const recommended = Math.min(alive, Math.floor(alive * 0.1));
     const estHours = (this.state.config.dorks * this.state.config.pagesPerDork) / (alive * 20 / 60);
 
@@ -326,23 +259,16 @@ export class Dashboard {
     this.addActivity('info', '', `Estimated time: ~${estHours.toFixed(1)} hours`);
   }
 
-  /**
-   * Update with live stats
-   */
   updateStats(stats: SchedulerStats): void {
     this.state.phase = 'running';
     this.state.stats = stats;
 
-    // Update progress
-    const percent = stats.totalDorks > 0 
-      ? (stats.completedDorks / stats.totalDorks) * 100 
-      : 0;
+    const percent = stats.totalDorks > 0 ? (stats.completedDorks / stats.totalDorks) * 100 : 0;
     
     if (this.widgets.progress) {
       this.widgets.progress.setPercent(percent);
     }
 
-    // Update stats display
     if (this.widgets.stats) {
       this.widgets.stats.setLabel(' LIVE STATS ');
       this.widgets.stats.setContent(`
@@ -369,7 +295,6 @@ export class Dashboard {
 `);
     }
 
-    // Update request history chart
     this.state.requestHistory.shift();
     this.state.requestHistory.push(Math.round(stats.requestsPerMin / 60));
     
@@ -377,17 +302,11 @@ export class Dashboard {
       this.widgets.chart.setData(['req/s'], [this.state.requestHistory]);
     }
 
-    // Check for alerts
     this.checkAlerts(stats);
-
     this.render();
   }
 
-  /**
-   * Check for alert conditions
-   */
   private checkAlerts(stats: SchedulerStats): void {
-    // High CAPTCHA rate
     if (stats.captchaCount > 10 && stats.completedDorks > 100) {
       const captchaRate = (stats.captchaCount / stats.completedDorks) * 100;
       if (captchaRate > 10) {
@@ -397,7 +316,6 @@ export class Dashboard {
       }
     }
 
-    // Low proxy pool
     if (stats.currentConcurrency < 50 && stats.currentConcurrency < this.state.config.workers * 0.3) {
       this.showAlert('critical',
         `Proxy pool running low: ${stats.currentConcurrency} remaining\nConsider pausing and adding more proxies`,
@@ -406,9 +324,6 @@ export class Dashboard {
     }
   }
 
-  /**
-   * Show alert box
-   */
   showAlert(type: 'warning' | 'critical', message: string, actions?: string[]): void {
     if (!this.widgets.alert) return;
 
@@ -430,9 +345,6 @@ export class Dashboard {
     this.render();
   }
 
-  /**
-   * Add activity log entry
-   */
   addActivity(type: 'success' | 'warning' | 'error' | 'info', dork: string, message: string): void {
     const time = new Date().toLocaleTimeString('en-US', { hour12: false });
     
@@ -458,23 +370,17 @@ export class Dashboard {
     }
   }
 
-  /**
-   * Show completion screen
-   */
   showComplete(stats: SchedulerStats, outputDir: string, files: string[]): void {
     this.state.phase = 'complete';
 
-    // Hide normal widgets
     if (this.widgets.chart) this.widgets.chart.hide();
     if (this.widgets.activity) this.widgets.activity.hide();
 
-    // Update progress to 100%
     if (this.widgets.progress) {
       this.widgets.progress.setPercent(100);
       this.widgets.progress.setLabel(' COMPLETE ');
     }
 
-    // Show completion stats
     if (this.widgets.stats) {
       this.widgets.stats.setLabel(' RESULTS ');
       this.widgets.stats.top = 3;
@@ -491,7 +397,6 @@ export class Dashboard {
 
   Raw URLs:              {cyan-fg}${stats.totalUrls.toLocaleString()}{/}
   After dedup:           {cyan-fg}${stats.uniqueUrls.toLocaleString()}{/}
-  Final unique domains:  {cyan-fg}${stats.uniqueUrls.toLocaleString()}{/}
 
 {bold}─── OUTPUT FILES ─────────────────────────────────{/bold}
 
@@ -502,7 +407,6 @@ ${files.map(f => `    ├── ${f}`).join('\n')}
 `);
     }
 
-    // Wait for any key to exit
     if (this.screen) {
       this.screen.once('keypress', () => {
         this.destroy();
@@ -513,9 +417,6 @@ ${files.map(f => `    ├── ${f}`).join('\n')}
     this.render();
   }
 
-  /**
-   * Show help dialog
-   */
   private showHelp(): void {
     if (!this.screen) return;
 
@@ -556,35 +457,22 @@ ${files.map(f => `    ├── ${f}`).join('\n')}
     this.render();
   }
 
-  /**
-   * Format duration
-   */
   private formatDuration(ms: number): string {
     const seconds = Math.floor(ms / 1000);
     const minutes = Math.floor(seconds / 60);
     const hours = Math.floor(minutes / 60);
 
-    if (hours > 0) {
-      return `${hours}h ${minutes % 60}m ${seconds % 60}s`;
-    }
-    if (minutes > 0) {
-      return `${minutes}m ${seconds % 60}s`;
-    }
+    if (hours > 0) return `${hours}h ${minutes % 60}m ${seconds % 60}s`;
+    if (minutes > 0) return `${minutes}m ${seconds % 60}s`;
     return `${seconds}s`;
   }
 
-  /**
-   * Render the screen
-   */
   private render(): void {
     if (this.screen) {
       this.screen.render();
     }
   }
 
-  /**
-   * Start auto-refresh
-   */
   startRefresh(intervalMs: number = 500): void {
     if (this.updateInterval) {
       clearInterval(this.updateInterval);
@@ -594,9 +482,6 @@ ${files.map(f => `    ├── ${f}`).join('\n')}
     }, intervalMs);
   }
 
-  /**
-   * Stop auto-refresh
-   */
   stopRefresh(): void {
     if (this.updateInterval) {
       clearInterval(this.updateInterval);
@@ -604,9 +489,6 @@ ${files.map(f => `    ├── ${f}`).join('\n')}
     }
   }
 
-  /**
-   * Destroy dashboard
-   */
   destroy(): void {
     this.stopRefresh();
     if (this.screen) {
@@ -615,20 +497,13 @@ ${files.map(f => `    ├── ${f}`).join('\n')}
     }
   }
 
-  /**
-   * Check if dashboard is active
-   */
   isActive(): boolean {
     return this.screen !== null;
   }
 }
 
-// Singleton instance
 let dashboardInstance: Dashboard | null = null;
 
-/**
- * Get or create dashboard instance
- */
 export function getDashboard(): Dashboard {
   if (!dashboardInstance) {
     dashboardInstance = new Dashboard();
@@ -636,9 +511,6 @@ export function getDashboard(): Dashboard {
   return dashboardInstance;
 }
 
-/**
- * Reset dashboard instance
- */
 export function resetDashboard(): void {
   if (dashboardInstance) {
     dashboardInstance.destroy();
