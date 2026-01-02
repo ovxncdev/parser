@@ -1,0 +1,129 @@
+version: '3.8'
+
+services:
+  dorker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: dorker:latest
+    container_name: dorker
+    
+    volumes:
+      # Mount input files
+      - ./input:/app/input:ro
+      # Mount output directory
+      - ./output:/app/output
+      # Mount logs
+      - ./logs:/app/logs
+      # Optional: mount config
+      - ./dorker.yml:/app/dorker.yml:ro
+    
+    environment:
+      - NODE_ENV=production
+      - DORKER_WORKERS=10
+      - DORKER_OUTPUT_DIR=/app/output
+    
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '4'
+          memory: 4G
+        reservations:
+          cpus: '1'
+          memory: 512M
+    
+    # Restart policy
+    restart: unless-stopped
+    
+    # Security options
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+    
+    # Health check
+    healthcheck:
+      test: ["CMD", "node", "-e", "console.log('ok')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # Optional: Run with specific dorks file
+  dorker-run:
+    extends:
+      service: dorker
+    container_name: dorker-run
+    profiles:
+      - run
+    command: >
+      node /app/cli/dist/index.js run
+      --dorks /app/input/dorks.txt
+      --proxies /app/input/proxies.txt
+      --output /app/output
+      --workers 10
+      --no-ui
+```
+
+---
+
+**Location:** `/home/claude/dorker/docker-compose.yml`
+
+## File 39: .dockerignore
+```
+# Git
+.git
+.gitignore
+
+# Node
+node_modules
+cli/node_modules
+npm-debug.log
+
+# Go
+worker/vendor
+
+# Build artifacts
+bin/
+dist/
+cli/dist/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Output
+output/
+logs/
+*.log
+
+# Config with secrets
+.env
+*.local
+
+# Test
+coverage/
+*.test.ts
+**/*_test.go
+
+# Documentation
+docs/
+*.md
+!README.md
+
+# Misc
+.checkpoint_*
+*.bak
+*.tmp
