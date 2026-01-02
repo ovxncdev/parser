@@ -8,11 +8,9 @@ import chalk from 'chalk';
 import figlet from 'figlet';
 import fs from 'fs';
 import path from 'path';
-import { getUI } from './ui.js';
 import { getDashboard } from './dashboard.js';
 import { runCommand, validateCommand, checkProxiesCommand, estimateCommand, resumeCommand } from './commands.js';
 import { getStateManager } from '../output/state.js';
-import type { CliOptions } from '../types/index.js';
 
 // Menu choices
 const MAIN_MENU_CHOICES = [
@@ -43,9 +41,6 @@ const OUTPUT_FORMATS = [
   { name: 'SQLite - Database format', value: 'sqlite', checked: false },
 ];
 
-/**
- * Show ASCII banner
- */
 function showBanner(): void {
   console.clear();
   console.log(
@@ -60,9 +55,6 @@ function showBanner(): void {
   console.log(chalk.gray('  Hybrid Go/TypeScript Architecture\n'));
 }
 
-/**
- * Show main menu
- */
 async function showMainMenu(): Promise<string> {
   const { choice } = await inquirer.prompt([
     {
@@ -76,9 +68,6 @@ async function showMainMenu(): Promise<string> {
   return choice;
 }
 
-/**
- * File browser helper
- */
 async function browseFile(message: string, defaultPath: string, extensions: string[]): Promise<string> {
   const { filePath } = await inquirer.prompt([
     {
@@ -100,9 +89,6 @@ async function browseFile(message: string, defaultPath: string, extensions: stri
   return filePath;
 }
 
-/**
- * New scan wizard
- */
 async function newScanWizard(useDashboard: boolean = false): Promise<void> {
   console.log(chalk.cyan('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'));
   console.log(chalk.bold('                    NEW SCAN WIZARD'));
@@ -110,11 +96,7 @@ async function newScanWizard(useDashboard: boolean = false): Promise<void> {
 
   // Step 1: Dorks file
   console.log(chalk.yellow('Step 1/6: Select Dorks File\n'));
-  const dorksFile = await browseFile(
-    'Path to dorks file:',
-    './input/dorks.txt',
-    ['.txt']
-  );
+  const dorksFile = await browseFile('Path to dorks file:', './input/dorks.txt', ['.txt']);
   const dorksCount = fs.readFileSync(dorksFile, 'utf-8')
     .split('\n')
     .filter(l => l.trim() && !l.startsWith('#')).length;
@@ -122,11 +104,7 @@ async function newScanWizard(useDashboard: boolean = false): Promise<void> {
 
   // Step 2: Proxies file
   console.log(chalk.yellow('Step 2/6: Select Proxies File\n'));
-  const proxiesFile = await browseFile(
-    'Path to proxies file:',
-    './input/proxies.txt',
-    ['.txt']
-  );
+  const proxiesFile = await browseFile('Path to proxies file:', './input/proxies.txt', ['.txt']);
   const proxiesCount = fs.readFileSync(proxiesFile, 'utf-8')
     .split('\n')
     .filter(l => l.trim() && !l.startsWith('#')).length;
@@ -199,7 +177,7 @@ async function newScanWizard(useDashboard: boolean = false): Promise<void> {
 
   // Step 7: Filter settings
   console.log(chalk.yellow('\nStep 6/6: Filter Settings\n'));
-  const { filters } = await inquirer.prompt([
+  await inquirer.prompt([
     {
       type: 'checkbox',
       name: 'filters',
@@ -250,7 +228,7 @@ async function newScanWizard(useDashboard: boolean = false): Promise<void> {
   ]);
 
   if (confirm) {
-    const options: CliOptions = {
+    const options = {
       dorks: dorksFile,
       proxies: proxiesFile,
       output: outputDir,
@@ -264,7 +242,6 @@ async function newScanWizard(useDashboard: boolean = false): Promise<void> {
     console.log('');
     
     if (useDashboard) {
-      // Use blessed dashboard
       const dashboard = getDashboard();
       dashboard.init();
       dashboard.showInit({
@@ -273,20 +250,15 @@ async function newScanWizard(useDashboard: boolean = false): Promise<void> {
         workers,
         pagesPerDork,
       });
-      
-      // Pass dashboard to run command (it will update stats)
       (options as any).dashboard = dashboard;
     }
     
-    await runCommand(options);
+    await runCommand(options as any);
   } else {
     console.log(chalk.yellow('\nScan cancelled.\n'));
   }
 }
 
-/**
- * Resume scan menu
- */
 async function resumeMenu(): Promise<void> {
   const stateManager = getStateManager();
   const resumeInfo = stateManager.getResumeInfo();
@@ -324,7 +296,6 @@ async function resumeMenu(): Promise<void> {
   ]);
 
   if (action === 'resume') {
-    // Need to get original files
     const { dorksFile, proxiesFile } = await inquirer.prompt([
       {
         type: 'input',
@@ -340,14 +311,14 @@ async function resumeMenu(): Promise<void> {
       },
     ]);
 
-    const options: CliOptions = {
+    const options = {
       dorks: dorksFile,
       proxies: proxiesFile,
       output: './output',
       resume: true,
     };
 
-    await resumeCommand(options);
+    await resumeCommand(options as any);
   } else if (action === 'delete') {
     const { confirmDelete } = await inquirer.prompt([
       {
@@ -365,9 +336,6 @@ async function resumeMenu(): Promise<void> {
   }
 }
 
-/**
- * Validate files menu
- */
 async function validateMenu(): Promise<void> {
   console.log(chalk.cyan('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'));
   console.log(chalk.bold('                   VALIDATE FILES'));
@@ -404,9 +372,6 @@ async function validateMenu(): Promise<void> {
   await pause();
 }
 
-/**
- * Check proxies menu
- */
 async function checkProxiesMenu(): Promise<void> {
   console.log(chalk.cyan('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'));
   console.log(chalk.bold('                   CHECK PROXIES'));
@@ -434,9 +399,6 @@ async function checkProxiesMenu(): Promise<void> {
   await pause();
 }
 
-/**
- * Estimate time menu
- */
 async function estimateMenu(): Promise<void> {
   console.log(chalk.cyan('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'));
   console.log(chalk.bold('                  TIME ESTIMATE'));
@@ -459,9 +421,6 @@ async function estimateMenu(): Promise<void> {
   await pause();
 }
 
-/**
- * Settings menu
- */
 async function settingsMenu(): Promise<void> {
   console.log(chalk.cyan('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'));
   console.log(chalk.bold('                     SETTINGS'));
@@ -501,9 +460,6 @@ async function settingsMenu(): Promise<void> {
   }
 }
 
-/**
- * View results menu
- */
 async function viewResultsMenu(): Promise<void> {
   console.log(chalk.cyan('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'));
   console.log(chalk.bold('                   VIEW RESULTS'));
@@ -529,10 +485,7 @@ async function viewResultsMenu(): Promise<void> {
     return;
   }
 
-  const choices = folders.map(f => ({
-    name: `📁  ${f}`,
-    value: f,
-  }));
+  const choices = folders.map(f => ({ name: `📁  ${f}`, value: f }));
   choices.push({ name: '↩️  Go back', value: 'back' });
 
   const { folder } = await inquirer.prompt([
@@ -556,7 +509,6 @@ async function viewResultsMenu(): Promise<void> {
     console.log(`  ${file.padEnd(20)} ${chalk.gray(size)}`);
   }
 
-  // Show stats if available
   const statsPath = path.join(resultPath, 'stats.json');
   if (fs.existsSync(statsPath)) {
     const stats = JSON.parse(fs.readFileSync(statsPath, 'utf-8'));
@@ -571,9 +523,6 @@ async function viewResultsMenu(): Promise<void> {
   await pause();
 }
 
-/**
- * Help menu
- */
 async function showHelp(): Promise<void> {
   console.log(chalk.cyan('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'));
   console.log(chalk.bold('                       HELP'));
@@ -604,9 +553,6 @@ async function showHelp(): Promise<void> {
   await pause();
 }
 
-/**
- * Pause for user input
- */
 async function pause(): Promise<void> {
   await inquirer.prompt([
     {
@@ -617,9 +563,6 @@ async function pause(): Promise<void> {
   ]);
 }
 
-/**
- * Format time in minutes to readable string
- */
 function formatTime(minutes: number): string {
   if (minutes < 60) {
     return `${Math.ceil(minutes)} minutes`;
@@ -629,9 +572,6 @@ function formatTime(minutes: number): string {
   return `${hours}h ${mins}m`;
 }
 
-/**
- * Main interactive loop
- */
 export async function startInteractive(): Promise<void> {
   let running = true;
 
