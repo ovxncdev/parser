@@ -5,16 +5,18 @@ import { readFile, access, constants, readdir } from 'node:fs/promises';
 import { existsSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createRequire } from 'node:module';
+import inquirer from 'inquirer';
 
 import { DorkerUI, showBanner } from './ui.js';
 import { WorkerIPC } from './ipc.js';
 import { FilterPipeline } from './filters.js';
 import { OutputWriter, formatNumber, formatDuration } from './output.js';
 
-import inquirer from 'inquirer';
-const VERSION = '1.0.0';
+// ES Module __dirname equivalent
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
+const VERSION = '1.0.0';
 const program = new Command();
 
 program
@@ -22,9 +24,15 @@ program
   .description('High-performance Google Dork parser')
   .version(VERSION);
 
+// Interactive mode (default)
+program
+  .command('start', { isDefault: true })
+  .description('Start dorker interactively')
+  .action(interactiveStart);
+
 program
   .command('run')
-  .description('Run dorker with dorks and proxies')
+  .description('Run dorker with command line arguments')
   .option('-d, --dorks <file>', 'Path to dorks file')
   .option('-p, --proxies <file>', 'Path to proxies file')
   .option('-o, --output <dir>', 'Output directory', './output')
@@ -49,149 +57,227 @@ program
   .requiredOption('-p, --proxies <file>', 'Path to proxies file')
   .action(validateCommand);
 
-// Interactive start (default command)
-program
-  .command('start', { isDefault: true })
-  .description('Start dorker interactively')
-  .action(interactiveStart);
+// ─────────────────────────────────────────────────────────────
+// Interactive Mode - User Friendly
+// ─────────────────────────────────────────────────────────────
 
 async function interactiveStart() {
+  console.clear();
   showBanner();
   
-  // Find available files
-  const inputDir = path.join(process.cwd(), '..', 'input');
-  const currentDir = process.cwd();
+  console.log('  Welcome to Dorker! Let\'s get started.\n');
   
-  let dorkFiles = [];
-  let proxyFiles = [];
+  // Scan for files in common locations
+  const searchDirs = [
+    path.resolve(process.cwd(), '..', 'input'),
+    path.resolve(process.cwd(), 'input'),
+    process.cwd(),
+  ];
   
-  // Scan for dork files
-  for (const dir of [inputDir, currentDir]) {
-    if (existsSync(dir)) {
-      try {
-        const files = await readdir(dir);
-        for (const file of files) {
-          const fullPath = path.join(dir, file);
-          if (file.includes('dork') || file.endsWith('.txt')) {
-            dorkFiles.push({ name: `${file} (${dir})`, value: fullPath });
+  const dorkFiles = [];
+  const proxyFiles = [];
+  
+  for (const dir of searchDirs) {
+    if (!existsSync(dir)) continue;
+    
+    try {
+      const files = await readdir(dir);
+      for (const file of files) {
+        if (file.startsWith('.')) continue;
+        if (!file.endsWith('.txt')) continue;
+        
+        const fullPath = path.join(dir, file);
+        const displayName = path.relative(process.cwd(), fullPath);
+        
+        // Count lines
+        try {
+          const content = await readFile(fullPath, 'utf-8');
+          const lines = content.split('\n').filter(l => l.trim() && !l.startsWith('#')).length;
+          
+          if (file.toLowerCase().includes('dork')) {
+            dorkFiles.push({ 
+              name: `${displayName} (${formatNumber(lines)} dorks)`, 
+              value: fullPath,
+              lines 
+            });
           }
-          if (file.includes('prox') || file.includes('proxy')) {
-            proxyFiles.push({ name: `${file} (${dir})`, value: fullPath });
+          if (file.toLowerCase().includes('prox')) {
+            proxyFiles.push({ 
+              name: `${displayName} (${formatNumber(lines)} proxies)`, 
+              value: fullPath,
+              lines 
+            });
           }
-        }
-      } catch (e) {}
-    }
+        } catch {}
+      }
+    } catch {}
   }
   
-  // Add manual entry options
-  dorkFiles.push({ name: '[ Enter path manually ]', value: '__manual__' });
-  proxyFiles.push({ name: '[ Enter path manually ]', value: '__manual__' });
+  // Add manual entry option
+  dorkFiles.push({ name: '📁 Browse / Enter path manually...', value: '__manual__' });
+  proxyFiles.push({ name: '📁 Browse / Enter path manually...', value: '__manual__' });
   
-  console.log('');
-  
+  // If no files found, show helpful message
+  if (dorkFiles.length === 1) {
+    console.log('  ⚠️  No dork files found. Create one in the input/ folder.\n');
+  }
+  if (proxyFiles.length === 1) {
+    console.log('  ⚠️  No proxy files found. Create one in the input/ folder.\n');
+  }
+
   const answers = await inquirer.prompt([
     {
       type: 'list',
       name: 'dorksFile',
-      message: 'Select dorks file:',
+      message: '📄 Select your dorks file:',
       choices: dorkFiles,
-      when: dorkFiles.length > 1
+      pageSize: 10
     },
     {
       type: 'input',
-      name: 'dorksFileManual',
-      message: 'Enter path to dorks file:',
-      when: (ans) => ans.dorksFile === '__manual__' || dorkFiles.length === 1,
+      name: 'dorksManual',
+      message: '   Enter full path to dorks file:',
+      when: (ans) => ans.dorksFile === '__manual__',
       validate: async (input) => {
+        if (!input.trim()) return 'Please enter a path';
+        const resolved = path.resolve(input);
         try {
-          await access(input, constants.R_OK);
+          await access(resolved, constants.R_OK);
           return true;
         } catch {
-          return 'File not found or not readable';
+          return `File not found: ${resolved}`;
         }
       }
     },
     {
       type: 'list',
       name: 'proxiesFile',
-      message: 'Select proxies file:',
+      message: '🌐 Select your proxies file:',
       choices: proxyFiles,
-      when: proxyFiles.length > 1
+      pageSize: 10
     },
     {
       type: 'input',
-      name: 'proxiesFileManual',
-      message: 'Enter path to proxies file:',
-      when: (ans) => ans.proxiesFile === '__manual__' || proxyFiles.length === 1,
+      name: 'proxiesManual',
+      message: '   Enter full path to proxies file:',
+      when: (ans) => ans.proxiesFile === '__manual__',
       validate: async (input) => {
+        if (!input.trim()) return 'Please enter a path';
+        const resolved = path.resolve(input);
         try {
-          await access(input, constants.R_OK);
+          await access(resolved, constants.R_OK);
           return true;
         } catch {
-          return 'File not found or not readable';
+          return `File not found: ${resolved}`;
         }
       }
     },
     {
-      type: 'number',
+      type: 'list',
       name: 'workers',
-      message: 'Number of workers:',
+      message: '⚡ How many concurrent workers?',
+      choices: [
+        { name: '5  (Slow & Safe)', value: 5 },
+        { name: '10 (Recommended)', value: 10 },
+        { name: '20 (Fast)', value: 20 },
+        { name: '50 (Aggressive)', value: 50 },
+        { name: 'Custom...', value: '__custom__' }
+      ],
+      default: 1
+    },
+    {
+      type: 'number',
+      name: 'workersCustom',
+      message: '   Enter number of workers (1-100):',
+      when: (ans) => ans.workers === '__custom__',
       default: 10,
-      validate: (input) => input > 0 && input <= 100 ? true : 'Enter 1-100'
+      validate: (n) => (n > 0 && n <= 100) ? true : 'Enter a number between 1 and 100'
     },
     {
       type: 'list',
-      name: 'outputFormat',
-      message: 'Output format:',
+      name: 'format',
+      message: '📝 Output format:',
       choices: [
-        { name: 'Text (.txt)', value: 'txt' },
-        { name: 'JSON (.json)', value: 'json' },
-        { name: 'CSV (.csv)', value: 'csv' },
-        { name: 'JSON Lines (.jsonl)', value: 'jsonl' }
+        { name: 'Plain Text (.txt) - One URL per line', value: 'txt' },
+        { name: 'JSON (.json) - Structured data', value: 'json' },
+        { name: 'CSV (.csv) - Spreadsheet compatible', value: 'csv' },
+        { name: 'JSON Lines (.jsonl) - Streaming JSON', value: 'jsonl' }
       ],
-      default: 'txt'
+      default: 0
     },
     {
       type: 'confirm',
       name: 'antiPublic',
-      message: 'Filter out public domains (google, facebook, etc)?',
+      message: '🛡️  Filter out common public sites (Google, Facebook, etc)?',
       default: true
     },
     {
       type: 'confirm',
       name: 'domainDedup',
-      message: 'Keep only one URL per domain?',
+      message: '🔗 Keep only one URL per domain (removes duplicates)?',
       default: true
     },
     {
-      type: 'confirm',
-      name: 'useUI',
-      message: 'Use fancy terminal UI?',
-      default: true
+      type: 'list',
+      name: 'uiMode',
+      message: '🎨 Display mode:',
+      choices: [
+        { name: 'Fancy Dashboard (Live stats, graphs)', value: 'fancy' },
+        { name: 'Simple Console (Minimal output)', value: 'simple' }
+      ],
+      default: 0
     },
     {
       type: 'confirm',
       name: 'startNow',
-      message: 'Start dorking?',
+      message: '🚀 Ready to start?',
       default: true
     }
   ]);
-  
+
   if (!answers.startNow) {
-    console.log('Cancelled.');
+    console.log('\n  👋 Cancelled. Run again when ready!\n');
     process.exit(0);
   }
+
+  // Resolve paths
+  const dorksFile = answers.dorksManual ? path.resolve(answers.dorksManual) : answers.dorksFile;
+  const proxiesFile = answers.proxiesManual ? path.resolve(answers.proxiesManual) : answers.proxiesFile;
+  const workers = answers.workersCustom || answers.workers;
+  const useUI = answers.uiMode === 'fancy';
+
+  // Show summary
+  console.log('\n  ───────────────────────────────────────');
+  console.log('  📋 Configuration Summary:');
+  console.log('  ───────────────────────────────────────');
   
-  // Resolve file paths
-  const dorksFile = answers.dorksFileManual || answers.dorksFile;
-  const proxiesFile = answers.proxiesFileManual || answers.proxiesFile;
+  const dorksContent = await readFile(dorksFile, 'utf-8');
+  const dorkCount = dorksContent.split('\n').filter(l => l.trim() && !l.startsWith('#')).length;
   
-  // Run with selected options
+  const proxiesContent = await readFile(proxiesFile, 'utf-8');
+  const proxyCount = proxiesContent.split('\n').filter(l => l.trim() && !l.startsWith('#')).length;
+
+  console.log(`  Dorks:     ${formatNumber(dorkCount)}`);
+  console.log(`  Proxies:   ${formatNumber(proxyCount)}`);
+  console.log(`  Workers:   ${workers}`);
+  console.log(`  Format:    ${answers.format}`);
+  console.log(`  Filters:   ${answers.antiPublic ? 'Anti-public' : ''} ${answers.domainDedup ? 'Domain-dedup' : ''}`.trim() || 'None');
+  console.log('  ───────────────────────────────────────\n');
+
+  if (proxyCount === 0) {
+    console.log('  ❌ No proxies found in file! Add proxies first.\n');
+    process.exit(1);
+  }
+
+  // Small delay for user to read
+  await new Promise(r => setTimeout(r, 1000));
+
+  // Run
   await runCommand({
     dorks: dorksFile,
     proxies: proxiesFile,
     output: './output',
-    workers: String(answers.workers),
+    workers: String(workers),
     timeout: '30000',
     baseDelay: '8000',
     minDelay: '3000',
@@ -201,57 +287,53 @@ async function interactiveStart() {
     dedup: true,
     domainDedup: answers.domainDedup,
     paramsOnly: false,
-    ui: answers.useUI,
-    format: answers.outputFormat
+    ui: useUI,
+    format: answers.format
   });
 }
+
+// ─────────────────────────────────────────────────────────────
+// Run Command
+// ─────────────────────────────────────────────────────────────
 
 async function runCommand(opts) {
   const startTime = Date.now();
   const useUI = opts.ui !== false && process.stdout.isTTY;
 
-  // Validate files
   if (!opts.dorks || !opts.proxies) {
-    console.error('Error: Dorks and proxies files are required');
-    console.error('Use: dorker run -d <dorks.txt> -p <proxies.txt>');
-    console.error('Or run: dorker (for interactive mode)');
+    console.error('\n  ❌ Error: Dorks and proxies files required\n');
+    console.error('  Usage: dorker run -d <dorks.txt> -p <proxies.txt>');
+    console.error('  Or just run: dorker (for interactive mode)\n');
     process.exit(1);
   }
 
   try {
     await access(opts.dorks, constants.R_OK);
     await access(opts.proxies, constants.R_OK);
-  } catch (err) {
-    console.error('Error: Cannot read dorks or proxies file');
+  } catch {
+    console.error('\n  ❌ Error: Cannot read dorks or proxies file\n');
     process.exit(1);
   }
 
-  // Find worker
   const workerPath = findWorker();
   if (!workerPath) {
-    console.error('Error: Worker binary not found. Run "make build-worker" first.');
+    console.error('\n  ❌ Error: Worker binary not found');
+    console.error('  Run: ./setup.sh to build it\n');
     process.exit(1);
   }
 
-  // Load dorks
   const dorksContent = await readFile(opts.dorks, 'utf-8');
   const dorks = dorksContent.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#'));
 
   if (dorks.length === 0) {
-    console.error('Error: No dorks found');
+    console.error('\n  ❌ Error: No dorks found in file\n');
     process.exit(1);
   }
 
-  // Load proxies to show count
-  const proxiesContent = await readFile(opts.proxies, 'utf-8');
-  const proxies = proxiesContent.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#'));
-
-  // Create output dir
   if (!existsSync(opts.output)) {
     mkdirSync(opts.output, { recursive: true });
   }
 
-  // Initialize components
   const filter = new FilterPipeline({
     antiPublic: opts.antiPublic !== false,
     dedup: opts.dedup !== false,
@@ -266,7 +348,6 @@ async function runCommand(opts) {
 
   const worker = new WorkerIPC(workerPath);
 
-  // UI or console
   let ui = null;
   if (useUI) {
     ui = new DorkerUI();
@@ -274,14 +355,11 @@ async function runCommand(opts) {
     ui.showInitPhase();
   } else {
     showBanner();
-    console.log(`Dorks:   ${formatNumber(dorks.length)} loaded from ${path.basename(opts.dorks)}`);
-    console.log(`Proxies: ${formatNumber(proxies.length)} loaded from ${path.basename(opts.proxies)}`);
-    console.log(`Workers: ${opts.workers}`);
-    console.log(`Output:  ${opts.output} (${opts.format})`);
+    console.log(`  Dorks:   ${formatNumber(dorks.length)}`);
+    console.log(`  Workers: ${opts.workers}`);
     console.log('');
   }
 
-  // State
   const state = {
     completed: 0,
     failed: 0,
@@ -292,25 +370,19 @@ async function runCommand(opts) {
     tasksSubmitted: false
   };
 
-  // Worker events
   worker.on('status', (status, message) => {
-    if (status === 'ready') {
-      // Don't log ready, wait for initialized
-    } else if (status === 'initialized') {
-      log(ui, 'success', `Worker initialized with ${opts.workers} workers`);
-      if (ui) ui.showRunning();
+    if (status === 'initialized') {
+      if (ui) {
+        ui.addActivity('success', '', `Worker ready (${opts.workers} workers)`);
+        ui.showRunning();
+      } else {
+        console.log(`  ✓ Worker initialized`);
+      }
 
       if (!state.tasksSubmitted) {
         state.tasksSubmitted = true;
         worker.submitTasks(dorks);
-        log(ui, 'info', `Submitted ${formatNumber(dorks.length)} tasks`);
       }
-    } else if (status === 'paused') {
-      log(ui, 'warning', 'Paused');
-      if (ui) ui.showPaused();
-    } else if (status === 'resumed') {
-      log(ui, 'info', 'Resumed');
-      if (ui) ui.showRunning();
     }
   });
 
@@ -329,16 +401,11 @@ async function runCommand(opts) {
         }
       }
 
-      if (ui) {
-        ui.addActivity('success', dork, `→ ${urls.length} URLs`);
-      }
+      if (ui) ui.addActivity('success', dork, `→ ${urls.length} URLs`);
     } else {
       state.failed++;
       state.failedDorks.push(dork);
-      
-      if (ui) {
-        ui.addActivity('error', dork, `→ ${error || status}`);
-      }
+      if (ui) ui.addActivity('error', dork, `→ ${error || status}`);
     }
   });
 
@@ -363,8 +430,9 @@ async function runCommand(opts) {
       ui.updateResults(state.urlsRaw, state.urlsFiltered, filter.getStats().uniqueDomains);
     } else {
       const pct = progress.percentage.toFixed(1);
-      const bar = '█'.repeat(Math.floor(progress.percentage / 5)) + '░'.repeat(20 - Math.floor(progress.percentage / 5));
-      process.stdout.write(`\r[${bar}] ${pct}% | ${progress.current}/${progress.total} | ${state.urlsFiltered} URLs   `);
+      const filled = Math.floor(progress.percentage / 5);
+      const bar = '█'.repeat(filled) + '░'.repeat(20 - filled);
+      process.stdout.write(`\r  [${bar}] ${pct}% | ${progress.current}/${progress.total} | ${state.urlsFiltered} URLs `);
     }
 
     if (progress.current >= progress.total && progress.total > 0) {
@@ -373,23 +441,22 @@ async function runCommand(opts) {
   });
 
   worker.on('proxy_info', (info) => {
-    if (ui) {
-      ui.updateProxies(info.alive, info.dead, info.quarantined);
-    }
+    if (ui) ui.updateProxies(info.alive, info.dead, info.quarantined);
   });
 
   worker.on('error', (code, message) => {
-    log(ui, 'error', `[${code}] ${message}`);
+    if (ui) ui.addActivity('error', '', `[${code}] ${message}`);
+    else console.log(`\n  ✗ Error: [${code}] ${message}`);
   });
 
   worker.on('close', (code) => {
     if (code !== 0 && code !== null) {
-      log(ui, 'error', `Worker exited with code ${code}`);
+      if (ui) ui.addActivity('error', '', `Worker crashed (code ${code})`);
+      else console.log(`\n  ✗ Worker exited: ${code}`);
     }
     finish();
   });
 
-  // UI callbacks
   if (ui) {
     ui.setCallbacks({
       onPause: () => worker.pause(),
@@ -398,12 +465,10 @@ async function runCommand(opts) {
     });
   }
 
-  // Stats polling
   const statsInterval = setInterval(() => {
     if (worker.isConnected()) worker.getStats();
   }, 1000);
 
-  // Finish handler
   let finished = false;
   async function finish() {
     if (finished) return;
@@ -442,16 +507,16 @@ async function runCommand(opts) {
         outputDir: output.getOutputDir()
       });
     } else {
-      console.log('\n');
-      console.log('═══════════════════════════════════════════════════════════════');
-      console.log('                         COMPLETE');
-      console.log('═══════════════════════════════════════════════════════════════');
-      console.log(`  Duration: ${formatDuration(duration)}`);
-      console.log(`  Dorks:    ${state.completed} completed, ${state.failed} failed`);
-      console.log(`  URLs:     ${formatNumber(state.urlsFiltered)} saved`);
-      console.log(`  Domains:  ${formatNumber(filterStats.uniqueDomains)} unique`);
-      console.log(`  Output:   ${output.getOutputDir()}`);
-      console.log('═══════════════════════════════════════════════════════════════');
+      console.log('\n\n');
+      console.log('  ═══════════════════════════════════════════════════════════');
+      console.log('                          ✓ COMPLETE');
+      console.log('  ═══════════════════════════════════════════════════════════');
+      console.log(`   Duration:  ${formatDuration(duration)}`);
+      console.log(`   Dorks:     ${state.completed} completed, ${state.failed} failed`);
+      console.log(`   URLs:      ${formatNumber(state.urlsFiltered)} saved`);
+      console.log(`   Domains:   ${formatNumber(filterStats.uniqueDomains)} unique`);
+      console.log(`   Output:    ${output.getOutputDir()}`);
+      console.log('  ═══════════════════════════════════════════════════════════\n');
       process.exit(0);
     }
   }
@@ -459,7 +524,6 @@ async function runCommand(opts) {
   process.on('SIGINT', () => { worker.shutdown(); setTimeout(finish, 1000); });
   process.on('SIGTERM', () => { worker.shutdown(); setTimeout(finish, 1000); });
 
-  // Start worker
   try {
     await worker.start();
     worker.init({
@@ -473,46 +537,48 @@ async function runCommand(opts) {
       proxyFile: path.resolve(opts.proxies)
     });
   } catch (err) {
-    log(ui, 'error', `Failed to start: ${err.message}`);
+    if (ui) ui.addActivity('error', '', `Failed: ${err.message}`);
+    else console.error(`\n  ❌ Failed to start: ${err.message}\n`);
     process.exit(1);
   }
 }
 
+// ─────────────────────────────────────────────────────────────
+// Validate Command
+// ─────────────────────────────────────────────────────────────
+
 async function validateCommand(opts) {
   showBanner();
-  console.log('Validating...\n');
+  console.log('  Validating files...\n');
 
   for (const [name, file] of [['Dorks', opts.dorks], ['Proxies', opts.proxies]]) {
-    console.log(`${name}: ${file}`);
+    console.log(`  ${name}: ${file}`);
     try {
       await access(file, constants.R_OK);
       const content = await readFile(file, 'utf-8');
       const lines = content.split('\n').filter(l => l.trim() && !l.startsWith('#'));
-      console.log(`  ✓ ${formatNumber(lines.length)} entries`);
+      console.log(`    ✓ ${formatNumber(lines.length)} entries\n`);
     } catch {
-      console.log('  ✗ Cannot read');
+      console.log('    ✗ Cannot read file\n');
     }
   }
-  console.log('\nDone.');
 }
+
+// ─────────────────────────────────────────────────────────────
+// Helpers
+// ─────────────────────────────────────────────────────────────
 
 function findWorker() {
   const paths = [
     path.join(process.cwd(), 'bin', 'worker'),
     path.join(process.cwd(), '..', 'bin', 'worker'),
     path.join(__dirname, '..', '..', 'bin', 'worker'),
+    path.join(__dirname, '..', '..', '..', 'bin', 'worker'),
   ];
-  for (const p of paths) if (existsSync(p)) return p;
-  return null;
-}
-
-function log(ui, type, message) {
-  if (ui) {
-    ui.addActivity(type, '', message);
-  } else {
-    const prefix = type === 'error' ? '✗' : type === 'warning' ? '⚠' : type === 'success' ? '✓' : 'ℹ';
-    console.log(`${prefix} ${message}`);
+  for (const p of paths) {
+    if (existsSync(p)) return p;
   }
+  return null;
 }
 
 program.parse();
