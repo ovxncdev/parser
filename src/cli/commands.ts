@@ -519,6 +519,16 @@ export function createProgram(): Command {
     .description('High-performance Google dork parser')
     .version('1.0.0');
 
+  // Default command - interactive mode
+  program
+    .command('interactive', { isDefault: true })
+    .alias('i')
+    .description('Start interactive mode with menus')
+    .action(async () => {
+      const { startInteractive } = await import('./interactive.js');
+      await startInteractive();
+    });
+
   program
     .command('run')
     .description('Run the dork parser')
